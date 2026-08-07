@@ -1,14 +1,11 @@
 package com.example.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 
 private val DarkColorScheme = darkColorScheme(
     primary = KeePassGreenPrimary,
@@ -103,14 +100,9 @@ fun CartinoTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography
-    ) {
-        CompositionLocalProvider(
-            LocalTextStyle provides TextStyle(fontFamily = VazirmatnFontFamily)
-        ) {
-            content()
-        }
-    }
+        typography = Typography,
+        content = content
+    )
 }
 
 @Composable
