@@ -54,23 +54,36 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         } catch (e: Throwable) {
             try {
                 application.deleteSharedPreferences("cartino_encrypted_prefs")
-                val masterKey = MasterKey.Builder(application)
-                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                    .build()
-                EncryptedSharedPreferences.create(
-                    application,
-                    "cartino_encrypted_prefs",
-                    masterKey,
-                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-                )
+                plainPrefs
             } catch (t: Throwable) {
                 plainPrefs
             }
         }
     }
 
-    private val _masterEncryptionPassword = MutableStateFlow(encryptedPrefs.getString("master_sync_password", "") ?: "")
+    private fun safeGetEncryptedString(key: String, defaultValue: String): String {
+        return try {
+            encryptedPrefs.getString(key, defaultValue) ?: defaultValue
+        } catch (t: Throwable) {
+            try {
+                plainPrefs.getString(key, defaultValue) ?: defaultValue
+            } catch (e: Throwable) {
+                defaultValue
+            }
+        }
+    }
+
+    private fun safePutEncryptedString(key: String, value: String) {
+        try {
+            encryptedPrefs.edit().putString(key, value).apply()
+        } catch (t: Throwable) {
+            try {
+                plainPrefs.edit().putString(key, value).apply()
+            } catch (e: Throwable) {}
+        }
+    }
+
+    private val _masterEncryptionPassword = MutableStateFlow(safeGetEncryptedString("master_sync_password", ""))
     val masterEncryptionPassword: StateFlow<String> = _masterEncryptionPassword.asStateFlow()
 
     private val _searchQuery = MutableStateFlow("")
@@ -170,26 +183,26 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     private val _webDavConfig = MutableStateFlow(
         WebDavConfig(
-            serverUrl = encryptedPrefs.getString("webdav_server_url", "") ?: "",
-            username = encryptedPrefs.getString("webdav_username", "") ?: "",
-            password = encryptedPrefs.getString("webdav_password", "") ?: "",
-            remotePath = encryptedPrefs.getString("webdav_remote_path", "cartino_backup.enc") ?: "cartino_backup.enc"
+            serverUrl = safeGetEncryptedString("webdav_server_url", ""),
+            username = safeGetEncryptedString("webdav_username", ""),
+            password = safeGetEncryptedString("webdav_password", ""),
+            remotePath = safeGetEncryptedString("webdav_remote_path", "cartino_backup.enc")
         )
     )
     val webDavConfig: StateFlow<WebDavConfig> = _webDavConfig.asStateFlow()
 
     init {
         // Migrate legacy plain shared preferences passwords if present
-        val oldMasterPass = plainPrefs.getString("master_sync_password", null)
-        val oldWebdavPass = plainPrefs.getString("webdav_password", null)
+        val oldMasterPass = try { plainPrefs.getString("master_sync_password", null) } catch (e: Throwable) { null }
+        val oldWebdavPass = try { plainPrefs.getString("webdav_password", null) } catch (e: Throwable) { null }
         if (!oldMasterPass.isNullOrBlank()) {
-            encryptedPrefs.edit().putString("master_sync_password", oldMasterPass).apply()
-            plainPrefs.edit().remove("master_sync_password").apply()
+            safePutEncryptedString("master_sync_password", oldMasterPass)
+            try { plainPrefs.edit().remove("master_sync_password").apply() } catch (e: Throwable) {}
             _masterEncryptionPassword.value = oldMasterPass
         }
         if (!oldWebdavPass.isNullOrBlank()) {
-            encryptedPrefs.edit().putString("webdav_password", oldWebdavPass).apply()
-            plainPrefs.edit().remove("webdav_password").apply()
+            safePutEncryptedString("webdav_password", oldWebdavPass)
+            try { plainPrefs.edit().remove("webdav_password").apply() } catch (e: Throwable) {}
             _webDavConfig.value = _webDavConfig.value.copy(password = oldWebdavPass)
         }
     }
@@ -231,12 +244,10 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         val cleanName = if (rawName.isBlank()) "cartino_backup.enc" else if (rawName.endsWith(".enc", ignoreCase = true)) rawName else "$rawName.enc"
         val updated = config.copy(remotePath = cleanName)
         _webDavConfig.value = updated
-        encryptedPrefs.edit()
-            .putString("webdav_server_url", updated.serverUrl)
-            .putString("webdav_username", updated.username)
-            .putString("webdav_password", updated.password)
-            .putString("webdav_remote_path", updated.remotePath)
-            .apply()
+        safePutEncryptedString("webdav_server_url", updated.serverUrl)
+        safePutEncryptedString("webdav_username", updated.username)
+        safePutEncryptedString("webdav_password", updated.password)
+        safePutEncryptedString("webdav_remote_path", updated.remotePath)
         SyncLogger.log("WEBDAV", "تنظیمات WebDAV ذخیره شد (${updated.serverUrl})")
     }
 
@@ -274,7 +285,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     fun updateMasterEncryptionPassword(password: String) {
         val trimmed = password.take(70)
         _masterEncryptionPassword.value = trimmed
-        encryptedPrefs.edit().putString("master_sync_password", trimmed).apply()
+        safePutEncryptedString("master_sync_password", trimmed)
     }
 
     fun createLocalBackupToUri(uri: Uri, password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {

@@ -27,9 +27,17 @@ object SecurityManager {
     private const val FIELD_KEY_ALIAS = "cartino_field_master_key"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
-    private fun getOrCreateSecretKey(): SecretKey {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        if (!keyStore.containsAlias(FIELD_KEY_ALIAS)) {
+    private fun getOrCreateSecretKey(): SecretKey? {
+        return try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (keyStore.containsAlias(FIELD_KEY_ALIAS)) {
+                val entry = keyStore.getEntry(FIELD_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+                if (entry != null) {
+                    return entry.secretKey
+                } else {
+                    keyStore.deleteEntry(FIELD_KEY_ALIAS)
+                }
+            }
             val keyGenerator = KeyGenerator.getInstance(
                 KeyProperties.KEY_ALGORITHM_AES,
                 ANDROID_KEYSTORE
@@ -44,8 +52,11 @@ object SecurityManager {
                 .build()
             keyGenerator.init(spec)
             keyGenerator.generateKey()
+            val entry = keyStore.getEntry(FIELD_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+            entry?.secretKey
+        } catch (e: Throwable) {
+            null
         }
-        return (keyStore.getEntry(FIELD_KEY_ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
     }
 
     /**
@@ -54,7 +65,7 @@ object SecurityManager {
     fun encryptField(plainText: String): String {
         if (plainText.isBlank() || plainText.startsWith("ENC:")) return plainText
         return try {
-            val secretKey = getOrCreateSecretKey()
+            val secretKey = getOrCreateSecretKey() ?: return plainText
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
             val iv = cipher.iv
@@ -63,7 +74,7 @@ object SecurityManager {
             System.arraycopy(iv, 0, combined, 0, iv.size)
             System.arraycopy(encryptedBytes, 0, combined, iv.size, encryptedBytes.size)
             "ENC:" + Base64.encodeToString(combined, Base64.NO_WRAP)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             plainText
         }
     }
@@ -81,14 +92,14 @@ object SecurityManager {
             val iv = combined.copyOfRange(0, 12)
             val cipherText = combined.copyOfRange(12, combined.size)
 
-            val secretKey = getOrCreateSecretKey()
+            val secretKey = getOrCreateSecretKey() ?: return encryptedText
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             val spec = GCMParameterSpec(128, iv)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
 
             val decryptedBytes = cipher.doFinal(cipherText)
             String(decryptedBytes, Charsets.UTF_8)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             encryptedText
         }
     }
