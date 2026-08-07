@@ -62,16 +62,60 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
+    private fun normalizeForSearch(text: String): String {
+        if (text.isBlank()) return ""
+        val converted = text
+            .map { char ->
+                when (char) {
+                    '۰', '٠' -> '0'
+                    '۱', '١' -> '1'
+                    '۲', '٢' -> '2'
+                    '۳', '٣' -> '3'
+                    '۴', '٤' -> '4'
+                    '۵', '٥' -> '5'
+                    '۶', '٦' -> '6'
+                    '۷', '٧' -> '7'
+                    '۸', '٨' -> '8'
+                    '۹', '٩' -> '9'
+                    else -> char
+                }
+            }
+            .joinToString("")
+        return converted
+            .replace('ي', 'ی')
+            .replace('ك', 'ک')
+            .replace('أ', 'ا')
+            .replace('إ', 'ا')
+            .replace('آ', 'ا')
+            .replace('ۀ', 'ه')
+            .replace('ة', 'ه')
+            .replace("\u200c", "")
+            .replace(" ", "")
+            .replace("(", "")
+            .replace(")", "")
+            .replace("-", "")
+            .lowercase()
+    }
+
     val allCards: StateFlow<List<BankCard>> = combine(cardDao.getAllCards(), _searchQuery) { cards, query ->
         val decryptedCards = cards.map { it.decrypted() }
         if (query.isBlank()) {
             decryptedCards
         } else {
-            decryptedCards.filter {
-                it.bankName.contains(query, ignoreCase = true) ||
-                it.cardNumber.contains(query) ||
-                it.cardHolderName.contains(query, ignoreCase = true) ||
-                it.iban.contains(query, ignoreCase = true)
+            val q = normalizeForSearch(query)
+            decryptedCards.filter { card ->
+                normalizeForSearch(card.bankName).contains(q) ||
+                normalizeForSearch(card.cardNumber).contains(q) ||
+                normalizeForSearch(card.cardHolderName).contains(q) ||
+                normalizeForSearch(card.iban).contains(q) ||
+                normalizeForSearch(card.accountNumber).contains(q) ||
+                normalizeForSearch(card.cvv2).contains(q) ||
+                normalizeForSearch(card.expiryYear).contains(q) ||
+                normalizeForSearch(card.expiryMonth).contains(q) ||
+                normalizeForSearch(card.notes).contains(q) ||
+                card.getCustomFields().any { (label, value) ->
+                    normalizeForSearch(label).contains(q) || normalizeForSearch(value).contains(q)
+                }
             }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -81,18 +125,18 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         if (query.isBlank()) {
             decryptedDocs
         } else {
-            val q = query.trim()
+            val q = normalizeForSearch(query)
             decryptedDocs.filter { doc ->
-                doc.title.contains(q, ignoreCase = true) ||
-                doc.docType.titleFa.contains(q, ignoreCase = true) ||
-                doc.nationalCode.contains(q, ignoreCase = true) ||
-                doc.documentNumber.contains(q, ignoreCase = true) ||
-                doc.issueDate.contains(q, ignoreCase = true) ||
-                doc.expiryDate.contains(q, ignoreCase = true) ||
-                doc.notes.contains(q, ignoreCase = true) ||
+                normalizeForSearch(doc.title).contains(q) ||
+                normalizeForSearch(doc.docType.titleFa).contains(q) ||
+                normalizeForSearch(doc.nationalCode).contains(q) ||
+                normalizeForSearch(doc.documentNumber).contains(q) ||
+                normalizeForSearch(doc.issueDate).contains(q) ||
+                normalizeForSearch(doc.expiryDate).contains(q) ||
+                normalizeForSearch(doc.notes).contains(q) ||
                 doc.getCustomFields().any { custom ->
-                    custom.label.contains(q, ignoreCase = true) ||
-                    custom.value.contains(q, ignoreCase = true)
+                    normalizeForSearch(custom.label).contains(q) ||
+                    normalizeForSearch(custom.value).contains(q)
                 }
             }
         }

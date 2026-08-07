@@ -169,6 +169,44 @@ font family for the application theme.
 Ensure `android:supportsRtl="true"` is in `AndroidManifest.xml` and layouts
 use `start`/`end` instead of `left`/`right`.
 
+### 4.4. Global Coverage Requirement
+ALL `Text` composables must render with Vazirmatn, including ones that set an
+ad-hoc `fontSize` without a Typography style. The agent MUST additionally set
+the default text style at the theme root so inheritance covers ad-hoc texts:
+
+```kotlin
+CompositionLocalProvider(
+    LocalTextStyle provides TextStyle(fontFamily = VazirmatnFontFamily)
+) { content() }
+```
+
+### 4.5. Binary Asset Protocol (human-in-the-loop in web IDEs)
+1. **Capability check:** before starting, the agent must determine whether it
+   can create/commit valid binary `.ttf` files in the current environment.
+2. In web IDEs (e.g., Google AI Studio) where binary creation is impossible
+   or unreliable (see 15.3), the agent **MUST NOT silently skip** font
+   integration and **MUST NOT ship `FontFamily.Default`**. This is an
+   uncertainty per section 13: **stop and ask the maintainer.**
+3. The agent MUST issue a precise "Font Request" containing exact names,
+   sources, and destination paths, e.g.:
+   > «برای تایپوگرافی فارسی به فونت **وزیرمتن (Vazirmatn)** نیاز است. لطفاً
+   > سه فایل زیر را از یکی از منابع رسمی
+   > (https://fonts.google.com/specimen/Vazirmatn یا
+   > https://github.com/rastikerdar/vazirmatn/releases) دانلود کنید و دقیقاً
+   > با همین نام‌ها در مسیر `app/src/main/res/font/` قرار دهید:
+   > `vazirmatn_regular.ttf` (وزن 400)، `vazirmatn_medium.ttf` (وزن 500)،
+   > `vazirmatn_bold.ttf` (وزن 700). سپس به من اطلاع دهید.»
+4. After the maintainer confirms ("fonts placed"), the agent MUST complete
+   the wiring per 4.1/4.4 and verify the build resolves `R.font.*`.
+5. If the maintainer declines or cannot provide binaries, the agent may
+   propose the Google-Fonts **downloadable-font XML** alternative (no binary
+   files needed) and implement it ONLY with explicit approval. Any remaining
+   deviation MUST be reported in the final summary (section 14) — **never
+   silently**.
+
+**RED RULE:** silently skipping section 4, or leaving `FontFamily.Default`
+while Persian text exists, is a policy violation equal to a security bypass.
+
 ---
 
 ## 5. Versioning policy

@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -133,56 +134,75 @@ fun AddEditCardDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            Button(
-                onClick = {
-                    val cleanCardNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(cardNumber).replace(" ", "").replace("-", "")
-                    val cleanIban = TextPreprocessor.convertPersianArabicDigitsToEnglish(iban).uppercase().replace(" ", "")
-                    val encodedCustom = BankCard.encodeCustomFields(customFieldsList)
-
-                    val finalBankName = customBankName.ifBlank { detectedBank.name }
-                    val cardToSave = (initialCard ?: BankCard(
-                        cardNumber = cleanCardNumber,
-                        bankName = finalBankName,
-                        bankCode = if (cleanCardNumber.length >= 6) cleanCardNumber.substring(0, 6) else "",
-                        cardHolderName = cardHolderName,
-                        iban = cleanIban,
-                        expiryYear = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryYear),
-                        expiryMonth = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryMonth),
-                        cvv2 = TextPreprocessor.convertPersianArabicDigitsToEnglish(cvv2),
-                        colorStartHex = detectedBank.colorStartHex,
-                        colorEndHex = detectedBank.colorEndHex,
-                        accountNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(accountNumber),
-                        notes = notes,
-                        customFieldsJson = encodedCustom
-                    )).copy(
-                        cardNumber = cleanCardNumber,
-                        bankName = finalBankName,
-                        bankCode = if (cleanCardNumber.length >= 6) cleanCardNumber.substring(0, 6) else "",
-                        cardHolderName = cardHolderName,
-                        iban = cleanIban,
-                        expiryYear = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryYear),
-                        expiryMonth = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryMonth),
-                        cvv2 = TextPreprocessor.convertPersianArabicDigitsToEnglish(cvv2),
-                        colorStartHex = detectedBank.colorStartHex,
-                        colorEndHex = detectedBank.colorEndHex,
-                        accountNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(accountNumber),
-                        notes = notes,
-                        customFieldsJson = encodedCustom
-                    )
-
-                    onSave(cardToSave)
-                },
-                enabled = cardNumber.isNotBlank() && cardNumberError == null,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("ذخیره کارت", fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                ) {
+                    Text("انصراف", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+
+                Button(
+                    onClick = {
+                        val cleanCardNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(cardNumber).replace(" ", "").replace("-", "")
+                        val cleanIban = TextPreprocessor.convertPersianArabicDigitsToEnglish(iban).uppercase().replace(" ", "")
+                        val encodedCustom = BankCard.encodeCustomFields(customFieldsList)
+
+                        val finalBankName = customBankName.ifBlank { detectedBank.name }
+                        val cardToSave = (initialCard ?: BankCard(
+                            cardNumber = cleanCardNumber,
+                            bankName = finalBankName,
+                            bankCode = if (cleanCardNumber.length >= 6) cleanCardNumber.substring(0, 6) else "",
+                            cardHolderName = cardHolderName,
+                            iban = cleanIban,
+                            expiryYear = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryYear),
+                            expiryMonth = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryMonth),
+                            cvv2 = TextPreprocessor.convertPersianArabicDigitsToEnglish(cvv2),
+                            colorStartHex = detectedBank.colorStartHex,
+                            colorEndHex = detectedBank.colorEndHex,
+                            accountNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(accountNumber),
+                            notes = notes,
+                            customFieldsJson = encodedCustom
+                        )).copy(
+                            cardNumber = cleanCardNumber,
+                            bankName = finalBankName,
+                            bankCode = if (cleanCardNumber.length >= 6) cleanCardNumber.substring(0, 6) else "",
+                            cardHolderName = cardHolderName,
+                            iban = cleanIban,
+                            expiryYear = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryYear),
+                            expiryMonth = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryMonth),
+                            cvv2 = TextPreprocessor.convertPersianArabicDigitsToEnglish(cvv2),
+                            colorStartHex = detectedBank.colorStartHex,
+                            colorEndHex = detectedBank.colorEndHex,
+                            accountNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(accountNumber),
+                            notes = notes,
+                            customFieldsJson = encodedCustom
+                        )
+
+                        onSave(cardToSave)
+                    },
+                    enabled = cardNumber.isNotBlank() && cardNumberError == null,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("ذخیره کارت", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("انصراف")
-            }
-        },
+        dismissButton = null,
         title = {
             Text(
                 text = if (initialCard != null) "ویرایش کارت بانکی" else "افزودن کارت بانکی جدید",
