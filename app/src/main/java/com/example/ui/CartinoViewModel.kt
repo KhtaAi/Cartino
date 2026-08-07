@@ -51,8 +51,22 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
-        } catch (e: Exception) {
-            plainPrefs
+        } catch (e: Throwable) {
+            try {
+                application.deleteSharedPreferences("cartino_encrypted_prefs")
+                val masterKey = MasterKey.Builder(application)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                EncryptedSharedPreferences.create(
+                    application,
+                    "cartino_encrypted_prefs",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+            } catch (t: Throwable) {
+                plainPrefs
+            }
         }
     }
 
