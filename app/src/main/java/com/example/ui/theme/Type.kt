@@ -11,8 +11,8 @@ import com.example.R
 val VazirmatnFontFamily = FontFamily(
     Font(R.font.vazirmatn_regular, FontWeight.Normal),
     Font(R.font.vazirmatn_medium, FontWeight.Medium),
-    Font(R.font.vazirmatn_bold, FontWeight.Bold),
-    Font(R.font.vazirmatn_bold, FontWeight.SemiBold)
+    Font(R.font.vazirmatn_semibold, FontWeight.SemiBold),
+    Font(R.font.vazirmatn_bold, FontWeight.Bold)
 )
 
 val Typography = Typography(
