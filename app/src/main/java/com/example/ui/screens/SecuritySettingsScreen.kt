@@ -1,0 +1,695 @@
+package com.example.ui.screens
+
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.SettingsBrightness
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.ui.CartinoViewModel
+import com.example.util.SecurityManager
+import com.example.util.findActivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+private sealed interface UpdateCheckState {
+    object Idle : UpdateCheckState
+    object Checking : UpdateCheckState
+    data class Available(val latestTag: String, val releaseUrl: String) : UpdateCheckState
+    data class UpToDate(val installedVersion: String) : UpdateCheckState
+    data class Error(val message: String) : UpdateCheckState
+}
+
+@Composable
+fun SecuritySettingsScreen(
+    viewModel: CartinoViewModel,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val isBiometricEnabled by viewModel.isBiometricEnabled.collectAsState()
+    val isFlagSecureEnabled by viewModel.isFlagSecureEnabled.collectAsState()
+
+    val isBiometricHardwareAvailable = remember(context) { SecurityManager.isBiometricAvailable(context) }
+
+    val versionName = remember(context) {
+        try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName ?: "1.0.7"
+        } catch (e: Exception) {
+            "1.0.7"
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "تنظیمات برنامه و امنیت",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold
+        )
+
+        val appThemeMode by viewModel.appThemeMode.collectAsState()
+        val appAccentPalette by viewModel.appAccentPalette.collectAsState()
+
+        // Appearance & Theme Settings Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Palette, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text("ظاهر و پوسته برنامه", fontWeight = FontWeight.Bold)
+                        Text("تعیین حالت دارک/لایت و پالت رنگی اصلی UI", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Item 1: Theme Mode Selection (Custom Modern Dropdown Menu)
+                Text("۱- حالت پوسته (تیره / روشن / سیستم)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                var themeDropdownExpanded by remember { mutableStateOf(false) }
+
+                val themeOptions = listOf(
+                    Triple("DARK", "تیره (دارک)", Icons.Default.DarkMode),
+                    Triple("LIGHT", "روشن (لایت)", Icons.Default.LightMode),
+                    Triple("SYSTEM", "تابع سیستم", Icons.Default.SettingsBrightness)
+                )
+
+                val selectedThemeOption = themeOptions.find { it.first == appThemeMode } ?: themeOptions[0]
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { themeDropdownExpanded = !themeDropdownExpanded },
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = selectedThemeOption.third,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = selectedThemeOption.second,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "بازکردن منو",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = themeDropdownExpanded,
+                        onDismissRequest = { themeDropdownExpanded = false },
+                        modifier = Modifier
+                            .fillMaxWidth(0.85f)
+                            .background(MaterialTheme.colorScheme.surface)
+                    ) {
+                        themeOptions.forEach { (modeKey, modeLabel, icon) ->
+                            val isSelected = appThemeMode == modeKey
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = modeLabel,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                            fontSize = 13.sp
+                                        )
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.setAppThemeMode(modeKey)
+                                    themeDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Item 2: UI Color Palette Selection
+                Text("۲- پالت رنگی کامل UI برنامه", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val paletteOptions = listOf(
+                    Triple("GREEN", Color(0xFF10B981), "سبز اصلی"),
+                    Triple("GOLD", Color(0xFFF59E0B), "طلایی"),
+                    Triple("CYAN", Color(0xFF06B6D4), "فیروزه‌ای"),
+                    Triple("PURPLE", Color(0xFF8B5CF6), "بنفش"),
+                    Triple("EMERALD", Color(0xFF059669), "زمردی")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    paletteOptions.forEach { (paletteKey, paletteColor, paletteName) ->
+                        val isSelected = appAccentPalette == paletteKey
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { viewModel.setAppAccentPalette(paletteKey) }
+                                .padding(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(paletteColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "انتخاب شده",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = paletteName,
+                                fontSize = 10.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Biometric Lock Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Fingerprint, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("قفل بیومتریک (اثر انگشت/چهره)", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (isBiometricHardwareAvailable) "سنسور بیومتریک دستگاه فعال است" else "سنسور بیومتریک روی دستگاه یافت نشد",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Switch(
+                        checked = isBiometricEnabled,
+                        onCheckedChange = { viewModel.toggleBiometricEnabled(it) }
+                    )
+                }
+
+                if (isBiometricEnabled) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            val activity = context.findActivity()
+                            if (activity != null) {
+                                SecurityManager.authenticateBiometric(
+                                    activity = activity,
+                                    onSuccess = {
+                                        Toast.makeText(context, "احراز هویت بیومتریک با موفقیت انجام شد!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onError = { err ->
+                                        Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("آزمایش سنسور اثر انگشت")
+                    }
+                }
+            }
+        }
+
+        // FLAG_SECURE Screenshot Prevention Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("محافظت در برابر اسکرین‌شات (FLAG_SECURE)", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "جلوگیری از ضبط صفحه و اسکرین‌شات در صفحات کارت‌ها",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Switch(
+                        checked = isFlagSecureEnabled,
+                        onCheckedChange = {
+                            viewModel.toggleFlagSecureEnabled(it)
+                            val activity = context.findActivity()
+                            if (activity != null) {
+                                SecurityManager.setScreenProtection(activity, it)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        val masterPassword by viewModel.masterEncryptionPassword.collectAsState()
+        var passwordInput by remember(masterPassword) { mutableStateOf(masterPassword) }
+        var isPasswordVisible by remember { mutableStateOf(false) }
+
+        // Master Sync Password Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Key, contentDescription = null, tint = com.example.ui.theme.GoldPrimary)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("رمز عبور همگام‌سازی و پشتیبان‌گیری", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "رمز عبور ثابت برای رمزنگاری فایلهای همگام‌سازی ابری و محلی (بدون نیاز به ورود تکراری)",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { newValue ->
+                            if (newValue.length <= 70) {
+                                passwordInput = newValue
+                            }
+                        },
+                        label = { Text("کلمه عبور رمزنگاری (تا ۷۰ کاراکتر)") },
+                        placeholder = { Text("کلمه عبور امن خود را وارد کنید") },
+                        singleLine = true,
+                        visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
+                                Icon(
+                                    imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "Toggle Password Visibility"
+                                )
+                            }
+                        },
+                        supportingText = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = if (passwordInput.length in 60..70) "طول کلمه عبور ایده‌آل و امن است" else "طول توصیه شده: ۶۰ تا ۷۰ کاراکتر",
+                                    color = if (passwordInput.length in 60..70) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp
+                                )
+                                Text(
+                                    text = "${passwordInput.length} / ۷۰",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Button(
+                    onClick = {
+                        viewModel.updateMasterEncryptionPassword(passwordInput)
+                        Toast.makeText(context, "کلمه عبور همگام‌سازی با موفقیت ذخیره شد", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = passwordInput.isNotBlank()
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = "Save Password", modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("ذخیره کلمه عبور همگام‌سازی", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Check for Updates Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = com.example.ui.theme.GoldPrimary)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("بررسی به‌روزرسانی برنامه", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "ارتباط با گیتهاب (https://github.com/KhtaAi/Cartino) جهت دریافت نسخه جدید",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val coroutineScope = rememberCoroutineScope()
+                var updateState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
+
+                when (val state = updateState) {
+                    is UpdateCheckState.Idle -> {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    updateState = UpdateCheckState.Checking
+                                    withContext(Dispatchers.IO) {
+                                        try {
+                                            val url = URL("https://api.github.com/repos/KhtaAi/Cartino/releases/latest")
+                                            val conn = url.openConnection() as HttpURLConnection
+                                            conn.requestMethod = "GET"
+                                            conn.setRequestProperty("User-Agent", "CartinoApp")
+                                            conn.connectTimeout = 7000
+                                            conn.readTimeout = 7000
+
+                                            if (conn.responseCode == 200) {
+                                                val responseText = conn.inputStream.bufferedReader().use { it.readText() }
+                                                val json = JSONObject(responseText)
+                                                val tagName = json.optString("tag_name", "").trim()
+                                                val htmlUrl = json.optString("html_url", "https://github.com/KhtaAi/Cartino/releases")
+
+                                                val cleanTag = tagName.removePrefix("v").trim()
+                                                val cleanInstalled = versionName.removePrefix("v").trim()
+
+                                                if (cleanTag.isNotBlank() && cleanTag != cleanInstalled) {
+                                                    updateState = UpdateCheckState.Available(latestTag = "v$cleanTag", releaseUrl = htmlUrl)
+                                                } else {
+                                                    updateState = UpdateCheckState.UpToDate(installedVersion = "v$cleanInstalled")
+                                                }
+                                            } else {
+                                                updateState = UpdateCheckState.Error("کد پاسخ گیتهاب: ${conn.responseCode}")
+                                            }
+                                        } catch (e: Exception) {
+                                            updateState = UpdateCheckState.Error(e.localizedMessage ?: "خطای ارتباط با شبکه")
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("بررسی نسخه جدید در گیتهاب")
+                        }
+                    }
+                    is UpdateCheckState.Checking -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("در حال بررسی آخرین انتشار گیتهاب...", fontSize = 12.sp)
+                        }
+                    }
+                    is UpdateCheckState.Available -> {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Download, contentDescription = null, tint = com.example.ui.theme.GoldPrimary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "نسخه جدید ${state.latestTag} در گیتهاب منتشر شده است!",
+                                    fontWeight = FontWeight.Bold,
+                                    color = com.example.ui.theme.GoldPrimary,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(state.releaseUrl))
+                                    context.startActivity(intent)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = com.example.ui.theme.GoldPrimary)
+                            ) {
+                                Text("دریافت نسخه جدید از گیتهاب (Releases)", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    is UpdateCheckState.UpToDate -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = androidx.compose.ui.graphics.Color(0xFF10B981))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "برنامه شما آپدیت است (${state.installedVersion})",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = androidx.compose.ui.graphics.Color(0xFF10B981)
+                            )
+                        }
+                    }
+                    is UpdateCheckState.Error -> {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "خطا در بررسی به‌روزرسانی: ${state.message}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { updateState = UpdateCheckState.Idle },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("تلاش مجدد")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Encryption Standards Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("استاندارد رمزنگاری دیتابیس", fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "تمام رکوردها و فایلهای داخل برنامه Cartino با استفاده از الگوریتم پیشرفته AES-256 و کلیدهای امنیتی Android KeyStore به صورت آفلاین ذخیره می‌شوند.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // App Information Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Info, contentDescription = null)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text("درباره Cartino", fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Cartino اپلیکیشن حرفه‌ای و امن مدیریت کارت‌های بانکی و مدارک شناسایی ایرانی با قابلیت اسکن هوشمند OCR، همگام‌سازی ابری WebDAV و پشتیبان‌گیری محلی است.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "نسخه نصب‌شده: v$versionName",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
