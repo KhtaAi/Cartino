@@ -685,19 +685,35 @@ ANY repository with zero edits:
    be rotated, regenerated, or deleted, **except under section 15.4 in
    response to a confirmed leak.**
 
-**Template (to be filled after first verified release):**
+**Verified State (recorded 2026-08-07, after first verified release):**
 ```
-- Repository: <owner>/<repo>
+- Repository: KhtaAi/Cartino
 - Visibility: Public
-- applicationId (frozen): <applicationId>
-- Signing identity: GitHub Secrets KEYSTORE_* (created <YYYY-MM-DD>)
-- versionCode formula: BASE_VERSION_CODE=<N> + commit count
+- applicationId (frozen): com.aistudio.cartino.app
+- Signing identity: GitHub Secrets KEYSTORE_* (created 2026-08-07)
+- versionCode formula: BASE_VERSION_CODE=100000 + commit count
 - Release channel: stable per push (prerelease: false)
-- Gradle execution: <wrapper|system gradle fallback>
-- Wrapper policy: <present|forbidden due to web-IDE binary corruption>
-- Last verified OTA update test: <from version> -> <to version>, <YYYY-MM-DD>
-- Key rotation history: (empty unless leak remediation occurred)
+- Gradle execution: system gradle fallback
+- Wrapper policy: wrapper forbidden due to web-IDE binary corruption
+- Last verified OTA update test: v0.1.2 -> v1.0.0, 2026-08-07
+- Key rotation history: (none — fresh public launch; no legacy committed key)
 ```
+---
 
-*(This section is intentionally blank until the first `v1.0.0` release is
-verified on a real device. The agent must NOT pre-fill it.)*
+---
+
+## 17. Single-Writer Rule (AI Studio as source of truth)
+- This project is developed exclusively in Google AI Studio. AI Studio is the
+  ONLY place that creates commits and pushes to GitHub. Every push to `main`
+  automatically publishes a release; no manual release steps are needed.
+- Local clones are READ-ONLY: only `gh` commands (secrets, runs, releases) and
+  inspection are allowed. `git commit`, `git push`, and history rewrites from
+  any local machine are FORBIDDEN (a one-time reconciliation required
+  maintainer approval on 2026-08-07 and must not be repeated).
+- GitHub → AI Studio sync is impossible; any commit created outside AI Studio
+  permanently diverges the workspace.
+- Version tags must be created server-side (GitHub Web UI tag creation, or
+  `gh release create --target main`), never via local `git push --tags`.
+- Do NOT re-import this GitHub repository into a new AI Studio project (AI
+  Studio demands a fresh repository and creates a vicious cycle); always
+  continue in the original connected AI Studio project.
