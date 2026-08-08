@@ -62,7 +62,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.font.FontFamily
+import com.example.ui.theme.VazirmatnFontFamily
+import com.example.util.formatIban
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -342,7 +343,7 @@ fun BankCardItem(
                             Text(
                                 text = formattedCardNumber,
                                 style = MaterialTheme.typography.titleMedium.copy(
-                                    fontFamily = FontFamily.Monospace,
+                                    fontFamily = VazirmatnFontFamily,
                                     letterSpacing = 0.5.sp,
                                     fontSize = 15.sp
                                 ),
@@ -458,7 +459,7 @@ fun BankCardItem(
                                         text = "شماره حساب: ${card.accountNumber}",
                                         fontSize = 11.sp,
                                         color = Color.White,
-                                        fontFamily = FontFamily.Monospace,
+                                        fontFamily = VazirmatnFontFamily,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
@@ -473,7 +474,7 @@ fun BankCardItem(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    copyToClipboard("IBAN", card.iban, "شماره شبا کپی شد")
+                                    copyToClipboard("IBAN", formatIban(card.iban), "شماره شبا کپی شد")
                                 },
                             shape = RoundedCornerShape(8.dp),
                             color = Color.Black.copy(alpha = 0.25f)
@@ -503,10 +504,10 @@ fun BankCardItem(
 
                                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                                     Text(
-                                        text = IranianBankHelper.formatIbanDisplay(card.iban),
+                                        text = formatIban(card.iban),
                                         fontSize = 11.sp,
                                         color = Color.White,
-                                        fontFamily = FontFamily.Monospace,
+                                        fontFamily = VazirmatnFontFamily,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }

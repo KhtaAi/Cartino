@@ -74,7 +74,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
+import com.example.ui.theme.VazirmatnFontFamily
 import com.example.util.SyncLogger
 import com.example.util.WebDavConfig
 
@@ -664,7 +664,7 @@ fun SyncBackupScreen(
                                     Text(
                                         text = logLine,
                                         fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace,
+                                        fontFamily = VazirmatnFontFamily,
                                         color = if (logLine.contains("خطا") || logLine.contains("Error") || logLine.contains("401") || logLine.contains("404"))
                                             MaterialTheme.colorScheme.error
                                         else if (logLine.contains("موفقیت") || logLine.contains("SUCCESS") || logLine.contains("200") || logLine.contains("201"))

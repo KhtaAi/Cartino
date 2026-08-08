@@ -280,12 +280,24 @@ object IranianBankHelper {
      * Standard Iranian card format: IR + 2 check digits, then 5 groups of 4 digits, then final 2 digits.
      */
     fun formatIbanDisplay(iban: String): String {
-        val clean = TextPreprocessor.convertPersianArabicDigitsToEnglish(iban).uppercase().replace(" ", "").replace("-", "")
-        if (clean.isBlank()) return ""
-        val fullIban = if (clean.startsWith("IR")) clean else "IR$clean"
-        if (fullIban.length != 26) return iban
-        return "${fullIban.substring(0, 4)} ${fullIban.substring(4, 8)} ${fullIban.substring(8, 12)} ${fullIban.substring(12, 16)} ${fullIban.substring(16, 20)} ${fullIban.substring(20, 24)} ${fullIban.substring(24, 26)}"
+        return formatIban(iban)
     }
+}
+
+fun formatIban(raw: String): String {
+    val clean = raw.filter { it.isLetterOrDigit() }.uppercase()
+    if (clean.length == 26 && clean.startsWith("IR")) {
+        val d = clean.substring(2)
+        if (d.length == 24 && d.all { it.isDigit() }) {
+            return buildString {
+                append("IR").append(d, 0, 2)
+                var i = 2
+                while (i + 4 <= 22) { append(' ').append(d, i, i + 4); i += 4 }
+                append(' ').append(d, 22, 24)
+            }
+        }
+    }
+    return clean
 }
 
 data class JalaliDate(val year: Int, val month: Int, val day: Int) {
