@@ -49,8 +49,8 @@ android {
     namespace = "com.example"
     compileSdk = 36
 
-    val autoVersionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: System.getenv("VERSION_CODE")?.toIntOrNull() ?: project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 25
-    val autoVersionName = (findProperty("versionName") as String?) ?: System.getenv("VERSION_NAME") ?: project.findProperty("VERSION_NAME")?.toString() ?: "1.0.25"
+    val autoVersionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: System.getenv("VERSION_CODE")?.toIntOrNull() ?: project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 26
+    val autoVersionName = (findProperty("versionName") as String?) ?: System.getenv("VERSION_NAME") ?: project.findProperty("VERSION_NAME")?.toString() ?: "1.0.26"
 
     defaultConfig {
         applicationId = "com.aistudio.cartino.app"
@@ -194,7 +194,25 @@ val decodeVazirmatnFonts = tasks.register("decodeVazirmatnFonts") {
         }
     }
 }
-tasks.configureEach { if (name == "preBuild") dependsOn(decodeVazirmatnFonts) }
+
+val decodeBankLogos = tasks.register("decodeBankLogos") {
+    val srcDir = file("logosrc")
+    val outDir = file("src/main/res/drawable")
+    doLast {
+        outDir.mkdirs()
+        srcDir.listFiles { f -> f.extension == "b64" }?.forEach { b64 ->
+            val clean = b64.readText().replace("\n", "").replace("\r", "").trim()
+            File(outDir, b64.nameWithoutExtension + ".png").writeBytes(Base64.getDecoder().decode(clean))
+        }
+    }
+}
+
+tasks.configureEach {
+    if (name == "preBuild") {
+        dependsOn(decodeVazirmatnFonts)
+        dependsOn(decodeBankLogos)
+    }
+}
 
 val buildDirProvider = layout.buildDirectory
 tasks.register("copyUniversalToDebug") {

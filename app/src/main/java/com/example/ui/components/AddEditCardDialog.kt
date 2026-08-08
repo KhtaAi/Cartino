@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -174,6 +179,13 @@ fun AddEditCardDialog(
                 )
 
                 // Live Bank Preview Badge
+                val detectedLogoText = detectedBank.logoSymbol.replace("_", " ")
+                val detectedLogoSize = when {
+                    detectedLogoText.length <= 6 -> 10.sp
+                    detectedLogoText.length <= 9 -> 8.sp
+                    else -> 7.sp
+                }
+
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -184,18 +196,56 @@ fun AddEditCardDialog(
                             .background(Brush.linearGradient(listOf(startColor, endColor)))
                             .padding(14.dp)
                     ) {
-                        Column {
-                            Text(
-                                text = "شناسایی هوشمند بانک: ${detectedBank.name}",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = "رنگ برند و لوگوی کارت به صورت خودکار اعمال شد",
-                                color = Color.White.copy(alpha = 0.8f),
-                                fontSize = 11.sp
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "شناسایی هوشمند بانک: ${detectedBank.name}",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = "رنگ برند و لوگوی کارت به صورت خودکار اعمال شد",
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            val context = LocalContext.current
+                            val logoResId = context.resources.getIdentifier(detectedBank.logoSymbol.lowercase(), "drawable", context.packageName)
+                            if (logoResId != 0) {
+                                Image(
+                                    painter = painterResource(id = logoResId),
+                                    contentDescription = detectedBank.name,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                )
+                            } else {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color.White.copy(alpha = 0.18f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = detectedLogoText,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = detectedLogoSize,
+                                            letterSpacing = 0.5.sp,
+                                            maxLines = 1,
+                                            modifier = Modifier.padding(horizontal = 10.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

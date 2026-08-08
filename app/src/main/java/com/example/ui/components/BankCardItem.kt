@@ -7,6 +7,7 @@ import android.widget.Toast
 import com.example.util.ClipboardAutoClearManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Autorenew
 import androidx.compose.material.icons.filled.ContentCopy
@@ -67,6 +70,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import com.example.ui.theme.VazirmatnFontFamily
+import com.example.util.IranianBankHelper
 import com.example.util.formatIban
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -75,7 +79,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BankCard
-import com.example.util.IranianBankHelper
 
 @Composable
 fun BankCardItem(
@@ -94,6 +97,14 @@ fun BankCardItem(
 
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showPinnedCannotDeleteDialog by remember { mutableStateOf(false) }
+
+    val bank = IranianBankHelper.getBankByCardNumber(card.cardNumber)
+    val logoText = bank.logoSymbol.replace("_", " ")
+    val logoSize = when {
+        logoText.length <= 6 -> 10.sp
+        logoText.length <= 9 -> 8.sp
+        else -> 7.sp
+    }
 
     val startColor = runCatching { Color(android.graphics.Color.parseColor(card.colorStartHex)) }.getOrDefault(Color(0xFF1E293B))
     val endColor = runCatching { Color(android.graphics.Color.parseColor(card.colorEndHex)) }.getOrDefault(Color(0xFF334155))
@@ -198,18 +209,34 @@ fun BankCardItem(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                shape = CircleShape,
-                                color = Color.White.copy(alpha = 0.2f),
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.CreditCard,
-                                        contentDescription = "Bank Logo",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                            val logoResId = context.resources.getIdentifier(bank.logoSymbol.lowercase(), "drawable", context.packageName)
+                            if (logoResId != 0) {
+                                Image(
+                                    painter = painterResource(id = logoResId),
+                                    contentDescription = bank.name,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                )
+                            } else {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color.White.copy(alpha = 0.18f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = logoText,
+                                            color = Color.White,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = logoSize,
+                                            letterSpacing = 0.5.sp,
+                                            maxLines = 1,
+                                            modifier = Modifier.padding(horizontal = 10.dp)
+                                        )
+                                    }
                                 }
                             }
                             Spacer(modifier = Modifier.width(10.dp))

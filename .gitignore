@@ -35,3 +35,4 @@ ci-signing.env
 
 # Generated font files
 app/src/main/res/font/*.ttf
+app/src/main/res/drawable/*.png
