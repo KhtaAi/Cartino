@@ -23,7 +23,10 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.ListAlt
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.UploadFile
@@ -67,8 +70,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.foundation.layout.Box
-import androidx.compose.material.icons.filled.ListAlt
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
@@ -78,13 +79,9 @@ import com.example.ui.theme.VazirmatnFontFamily
 import com.example.util.SyncLogger
 import com.example.util.WebDavConfig
 
-import androidx.compose.material.icons.filled.Cloud
-import androidx.documentfile.provider.DocumentFile
-
 enum class BackupTarget {
     LOCAL_FILE,
-    WEBDAV,
-    CLOUD_DRIVE
+    WEBDAV
 }
 
 enum class ActionType {
@@ -101,7 +98,6 @@ fun SyncBackupScreen(
     val clipboardManager = LocalClipboardManager.current
     val syncState by viewModel.syncState.collectAsState()
     val webDavConfig by viewModel.webDavConfig.collectAsState()
-    val cloudDriveConfig by viewModel.cloudDriveConfig.collectAsState()
     val masterPassword by viewModel.masterEncryptionPassword.collectAsState()
     val logs by SyncLogger.logs.collectAsState()
 
@@ -119,30 +115,6 @@ fun SyncBackupScreen(
     var remoteFileNameInput by remember(webDavConfig) { mutableStateOf(webDavConfig.remotePath) }
 
     var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
-
-    // Cloud Drive SAF Folder Picker Launcher
-    val openCloudTreeLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        uri?.let { folderUri ->
-            val folderDoc = DocumentFile.fromTreeUri(context, folderUri)
-            val name = folderDoc?.name ?: folderUri.lastPathSegment ?: "پوشه ابری"
-            viewModel.setCloudDriveFolder(folderUri, name)
-            Toast.makeText(context, "پوشه $name با موفقیت انتخاب شد", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // Cloud Drive Specific File Picker Launcher
-    val openSpecificCloudEncLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        uri?.let { fileUri ->
-            pendingRestoreUri = fileUri
-            activeTarget = BackupTarget.LOCAL_FILE
-            activeAction = ActionType.RESTORE
-            showPasswordDialog = true
-        }
-    }
 
     // SAF Create File Launcher (Local Backup to phone internal/external storage)
     val createDocumentLauncher = rememberLauncherForActivityResult(
@@ -249,7 +221,7 @@ fun SyncBackupScreen(
             SyncUiState.Idle -> {}
         }
 
-        // Section 1: Google Drive / Cloud Storage (SAF)
+        // Section 1: Local / Cloud File Backup (.enc on phone or cloud storage)
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -257,123 +229,65 @@ fun SyncBackupScreen(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Cloud, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "پشتیبان‌گیری گوگل‌درایو / فضای ابری",
+                        text = "پشتیبان‌گیری روی دستگاه یا فضای ابری",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                // Status Information Box
+                // Info Hint
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.surface,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "پوشه انتخاب‌شده: ",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = if (cloudDriveConfig.folderName.isNotBlank()) cloudDriveConfig.folderName else "انتخاب نشده",
-                                fontSize = 13.sp,
-                                color = if (cloudDriveConfig.folderName.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "آخرین پشتیبان‌گیری: ",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = if (cloudDriveConfig.lastBackupTime.isNotBlank()) cloudDriveConfig.lastBackupTime else "ثبت نشده",
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "می‌توانید پوشه‌ای از هر ارائه‌دهندهٔ نصب‌شده روی دستگاه انتخاب کنید: Files داخلی، Google Drive، Dropbox، OneDrive و غیره.",
+                            fontSize = 12.sp,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-
-                Button(
-                    onClick = {
-                        openCloudTreeLauncher.launch(null)
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                ) {
-                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("انتخاب پوشه در درایو")
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            if (cloudDriveConfig.folderUri.isBlank()) {
-                                Toast.makeText(context, "لطفاً ابتدا پوشه مورد نظر را در گوگل‌درایو / فضای ابری انتخاب کنید", Toast.LENGTH_LONG).show()
-                            } else {
-                                activeTarget = BackupTarget.CLOUD_DRIVE
-                                activeAction = ActionType.BACKUP
-                                showPasswordDialog = true
-                            }
+                            createDocumentLauncher.launch("cartino_backup.enc")
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("پشتیبان‌گیری", maxLines = 1, softWrap = false)
+                        Text("بکاپ", maxLines = 1, softWrap = false)
                     }
-
                     OutlinedButton(
                         onClick = {
-                            if (cloudDriveConfig.folderUri.isBlank()) {
-                                Toast.makeText(context, "لطفاً ابتدا پوشه مورد نظر را در گوگل‌درایو / فضای ابری انتخاب کنید", Toast.LENGTH_LONG).show()
-                            } else {
-                                activeTarget = BackupTarget.CLOUD_DRIVE
-                                activeAction = ActionType.RESTORE
-                                showPasswordDialog = true
-                            }
+                            openDocumentLauncher.launch(arrayOf("*/*"))
                         },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("بازیابی", maxLines = 1, softWrap = false)
+                        Text("بازیابی از فایل", maxLines = 1, softWrap = false)
                     }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                TextButton(
-                    onClick = {
-                        openSpecificCloudEncLauncher.launch(arrayOf("application/octet-stream", "*/*"))
-                    },
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                ) {
-                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("بازیابی از فایل پشتیبان مشخص (.enc)...", fontSize = 12.sp)
                 }
             }
         }
@@ -533,54 +447,7 @@ fun SyncBackupScreen(
             }
         }
 
-        // Section 2: Local File Backup (.enc on phone storage)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "پشتیبان‌گیری محلی روی حافظه گوشی (فایل .enc)",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = "ذخیره مستقیم فایل رمزنگاری شده enc. در مسیر دلخواه شما روی حافظه داخلی دستگاه.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            createDocumentLauncher.launch("cartino_backup.enc")
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("بکاپ", maxLines = 1, softWrap = false)
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            openDocumentLauncher.launch(arrayOf("*/*"))
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("بازیابی از فایل", maxLines = 1, softWrap = false)
-                    }
-                }
-            }
-        }
+
 
         // Section 3: Diagnostic Sync Logs Card
         Card(
@@ -719,13 +586,6 @@ fun SyncBackupScreen(
                                     } else {
                                         viewModel.restoreLocalBackupFromUri(uri, effectivePwd)
                                     }
-                                }
-                            }
-                            BackupTarget.CLOUD_DRIVE -> {
-                                if (activeAction == ActionType.BACKUP) {
-                                    viewModel.backupToCloudDrive(effectivePwd)
-                                } else {
-                                    viewModel.restoreFromCloudDrive(effectivePwd)
                                 }
                             }
                         }

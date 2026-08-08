@@ -15,7 +15,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import androidx.documentfile.provider.DocumentFile
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -278,112 +277,5 @@ object BackupSyncManager {
             SyncLogger.log("WEBDAV_GET", "خطای ارتباط شبکه: ${e.localizedMessage}")
             throw e
         }
-    }
-
-    /**
-     * Creates an encrypted backup file (.enc) inside a user-selected SAF DocumentTree Uri (Google Drive / Cloud Space).
-     */
-    suspend fun createEncryptedBackupToCloudTreeUri(
-        context: Context,
-        treeUri: Uri,
-        password: String
-    ): String = withContext(Dispatchers.IO) {
-        SyncLogger.log("CLOUD_DRIVE", "شروع پشتیبان‌گیری در پوشه ابری ($treeUri)")
-        val payload = createEncryptedBackupPayload(context, password)
-
-        val treeDoc = try {
-            DocumentFile.fromTreeUri(context, treeUri)
-        } catch (e: SecurityException) {
-            SyncLogger.log("CLOUD_DRIVE", "خطای دسترسی به پوشه: ${e.message}")
-            throw SecurityException("دسترسی به پوشه ابری لغو شده یا نامعتبر است. لطفاً دوباره پوشه را انتخاب کنید.")
-        }
-
-        if (treeDoc == null || !treeDoc.exists() || !treeDoc.canWrite()) {
-            SyncLogger.log("CLOUD_DRIVE", "عدم دسترسی نوشتن در پوشه ابری")
-            throw SecurityException("دسترسی به پوشه ابری لغو شده یا نامعتبر است. لطفاً دوباره پوشه را انتخاب کنید.")
-        }
-
-        val dateStamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
-        val fileName = "cartino-backup-$dateStamp.enc"
-
-        val newFileDoc = treeDoc.createFile("application/octet-stream", fileName)
-            ?: treeDoc.createFile("*/*", fileName)
-            ?: run {
-                SyncLogger.log("CLOUD_DRIVE", "امکان ساخت فایل $fileName در پوشه وجود ندارد")
-                throw IllegalStateException("امکان ایجاد فایل $fileName در پوشه انتخاب‌شده وجود ندارد")
-            }
-
-        try {
-            context.contentResolver.openOutputStream(newFileDoc.uri)?.use { os ->
-                os.write(payload.toByteArray(Charsets.UTF_8))
-            } ?: run {
-                SyncLogger.log("CLOUD_DRIVE", "خطا: عدم باز شدن OutputStream در فایل ابری")
-                throw IllegalStateException("امکان نوشتن در فایل ابری وجود ندارد")
-            }
-        } catch (e: SecurityException) {
-            SyncLogger.log("CLOUD_DRIVE", "SecurityException هنگام نوشتن: ${e.message}")
-            throw SecurityException("دسترسی به پوشه ابری لغو شده است. لطفاً دوباره پوشه را انتخاب کنید.")
-        }
-
-        val displayTime = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date())
-        SyncLogger.log("CLOUD_DRIVE", "پشتیبان‌گیری ابری با موفقیت انجام شد: $fileName ($displayTime)")
-        displayTime
-    }
-
-    /**
-     * Restores encrypted backup from the newest .enc file in user-selected SAF DocumentTree Uri.
-     */
-    suspend fun restoreFromCloudTreeUri(
-        context: Context,
-        treeUri: Uri,
-        password: String
-    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
-        SyncLogger.log("CLOUD_DRIVE", "شروع بازیابی از پوشه ابری ($treeUri)")
-
-        val treeDoc = try {
-            DocumentFile.fromTreeUri(context, treeUri)
-        } catch (e: SecurityException) {
-            SyncLogger.log("CLOUD_DRIVE", "خطای دسترسی به پوشه: ${e.message}")
-            throw SecurityException("دسترسی به پوشه ابری لغو شده یا نامعتبر است. لطفاً دوباره پوشه را انتخاب کنید.")
-        }
-
-        if (treeDoc == null || !treeDoc.exists() || !treeDoc.canRead()) {
-            SyncLogger.log("CLOUD_DRIVE", "عدم دسترسی خواندن از پوشه ابری")
-            throw SecurityException("دسترسی به پوشه ابری لغو شده یا نامعتبر است. لطفاً دوباره پوشه را انتخاب کنید.")
-        }
-
-        val encFiles = try {
-            treeDoc.listFiles().filter { doc ->
-                doc.isFile && (doc.name?.endsWith(".enc", ignoreCase = true) == true ||
-                        doc.name?.endsWith(".zip", ignoreCase = true) == true ||
-                        doc.type == "application/octet-stream")
-            }
-        } catch (e: SecurityException) {
-            SyncLogger.log("CLOUD_DRIVE", "SecurityException در فهرست کردن فایل‌ها: ${e.message}")
-            throw SecurityException("دسترسی به پوشه ابری لغو شده است. لطفاً دوباره پوشه را انتخاب کنید.")
-        }
-
-        if (encFiles.isEmpty()) {
-            SyncLogger.log("CLOUD_DRIVE", "هیچ فایل پشتیبان .enc در پوشه ابری یافت نشد")
-            throw IllegalStateException("هیچ فایل پشتیبان .enc در پوشه ابری انتخاب‌شده یافت نشد")
-        }
-
-        val newestFile = encFiles.maxByOrNull { it.lastModified() }
-            ?: throw IllegalStateException("هیچ فایل پشتیبان معتبری یافت نشد")
-
-        SyncLogger.log("CLOUD_DRIVE", "جدیدترین فایل پشتیبان یافت شد: ${newestFile.name}")
-
-        val payloadText = try {
-            context.contentResolver.openInputStream(newestFile.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-                ?: run {
-                    SyncLogger.log("CLOUD_DRIVE", "خطا: عدم امکان خواندن فایل ${newestFile.name}")
-                    throw IllegalStateException("امکان خواندن فایل ${newestFile.name} وجود ندارد")
-                }
-        } catch (e: SecurityException) {
-            SyncLogger.log("CLOUD_DRIVE", "SecurityException هنگام خواندن فایل: ${e.message}")
-            throw SecurityException("دسترسی به پوشه ابری لغو شده است. لطفاً دوباره پوشه را انتخاب کنید.")
-        }
-
-        restoreFromEncryptedPayload(context, payloadText, password)
     }
 }
