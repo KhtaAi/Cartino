@@ -180,29 +180,31 @@ CompositionLocalProvider(
 ) { content() }
 ```
 
-### 4.5. Binary Asset Protocol (human-in-the-loop in web IDEs)
-1. **Capability check:** before starting, the agent must determine whether it
-   can create/commit valid binary `.ttf` files in the current environment.
-2. In web IDEs (e.g., Google AI Studio) where binary creation is impossible
-   or unreliable (see 15.3), the agent **MUST NOT silently skip** font
-   integration and **MUST NOT ship `FontFamily.Default`**. This is an
-   uncertainty per section 13: **stop and ask the maintainer.**
-3. The agent MUST issue a precise "Font Request" containing exact names,
-   sources, and destination paths, e.g.:
+### 4.5. Binary Asset Protocol (human-in-the-loop, base64 edition)
+1. **Assumption:** in web IDEs (Google AI Studio), the agent can NEVER commit
+   a valid binary `.ttf` (see 15.5): direct `.ttf` commits are silently
+   re-encoded as text and crash the app at first font render (Cartino crash
+   incident, 2026-08-07). Asking the maintainer to upload `.ttf` files is
+   therefore a BROKEN protocol and MUST NOT be used.
+2. The agent **MUST NOT silently skip** font integration and **MUST NOT ship
+   `FontFamily.Default`** while Persian text exists. This is an uncertainty
+   per section 13: **stop and ask the maintainer.**
+3. The agent MUST issue a precise "Font Request (base64 edition)", e.g.:
    > «برای تایپوگرافی فارسی به فونت **وزیرمتن (Vazirmatn)** نیاز است. لطفاً
-   > سه فایل زیر را از یکی از منابع رسمی
-   > (https://fonts.google.com/specimen/Vazirmatn یا
-   > https://github.com/rastikerdar/vazirmatn/releases) دانلود کنید و دقیقاً
-   > با همین نام‌ها در مسیر `app/src/main/res/font/` قرار دهید:
-   > `vazirmatn_regular.ttf` (وزن 400)، `vazirmatn_medium.ttf` (وزن 500)،
-   > `vazirmatn_bold.ttf` (وزن 700). سپس به من اطلاع دهید.»
-4. After the maintainer confirms ("fonts placed"), the agent MUST complete
-   the wiring per 4.1/4.4 and verify the build resolves `R.font.*`.
-5. If the maintainer declines or cannot provide binaries, the agent may
-   propose the Google-Fonts **downloadable-font XML** alternative (no binary
-   files needed) and implement it ONLY with explicit approval. Any remaining
-   deviation MUST be reported in the final summary (section 14) — **never
-   silently**.
+   > نسخه رسمی را دانلود کنید و روی سیستم خودتان سه فایل متنی base64 بسازید:
+   > `base64 -w 0 vazirmatn_regular.ttf > vazirmatn_regular.b64` (و همین‌طور
+   > برای medium و bold). سپس **فقط فایل‌های `.b64`** را در مسیر
+   > `app/fontsrc/` آپلود کنید (هرگز `.ttf`) و پیام «fonts placed» بدهید.»
+4. After confirmation, the agent MUST wire the crash-proof pipeline:
+   - `decodeVazirmatnFonts` Gradle task (before `preBuild`) decoding
+     `app/fontsrc/*.b64` into `app/src/main/res/font/*.ttf`;
+   - `.gitignore` line `app/src/main/res/font/*.ttf` (decoded binaries are
+     never committed);
+   - `VazirmatnFontFamily` + full Typography (4.1) and global `LocalTextStyle`
+     coverage (4.4);
+   - verify the build resolves `R.font.*` and the preview renders Vazirmatn.
+5. Downloadable-font XML remains a fallback ONLY with explicit maintainer
+   approval; any deviation must be reported per section 14 — never silently.
 
 **RED RULE:** silently skipping section 4, or leaving `FontFamily.Default`
 while Persian text exists, is a policy violation equal to a security bypass.
@@ -339,7 +341,7 @@ execute the following steps:
 
 ### Step 1: Generate Keystore Locally
 Use the local JDK `keytool` and `openssl` to generate a strong release
-keystore in the project root (temporarily):
+keystore in a temporary directory OUTSIDE any repository clone (e.g., `cd ~`):
 
 ```bash
 export MSYS_NO_PATHCONV=1  # Required on Windows Git Bash to prevent path mangling of -subj
@@ -372,7 +374,8 @@ gh secret list -R OWNER/REPO
 If successful, **immediately**:
 1. Move `release.keystore` and a copy of `$STORE_PASS` to a secure password
    manager or encrypted drive (this is the ONLY backup — losing it means
-   losing the ability to update installed users).
+   losing the ability to update installed users). Store the key and the
+   password in SEPARATE locations.
 2. Delete all temporary local files:
    ```bash
    rm -f release.keystore keystore_base64.txt key.pem cert.pem PASS.txt
@@ -601,6 +604,8 @@ After implementing changes, the agent must verify:
 12. **Repository visibility is detected and respected (section 0.6).**
 13. **Zero keystore material, base64-encoded or otherwise, exists in the
     repository tree or any commit in history.**
+14. **Zero binary assets (e.g., `.ttf`) exist in the repository tree; font
+    binaries are materialized at build time per 4.5/15.5.**
 
 ---
 
@@ -638,6 +643,8 @@ maintainer:
   a public fork or public clone of this repository.**
 - **Any prior keystore material in commit history of this repository** —
   requires the leak remediation sequence in 15.4 before any release.
+- **Inability to add a required binary asset (e.g., font) in a web IDE** —
+  follow the base64 protocol in 4.5; never silently skip.
 
 Do not guess in security-critical or release-critical situations.
 
@@ -706,6 +713,24 @@ After completing the work, the agent must output a summary containing:
   commercial, FIRST migrate the signing identity to GitHub Secrets or Play
   App Signing and rotate the key before any other change.
 
+### 15.5 Binary Assets Rule (web-IDE binary corruption)
+- Binary assets (e.g., .ttf fonts) committed through AI Studio are silently
+  corrupted: the web commit pipeline re-encodes binary bytes as text (GitHub
+  then renders them as multi-line text; sizes inflate; OS font validators
+  reject them; Android crashes at first font render).
+- NEVER commit binary asset files from AI Studio. Only all-text strategies
+  are allowed for fonts and other binaries:
+  (a) commit base64 TEXT files + a Gradle decode step that materializes the
+      real binary at build time (decoded outputs are gitignored), or
+  (b) downloadable fonts (font-provider XML), or
+  (c) CI-side fetch from a pinned official URL with checksum verification.
+- A release that crashes on launch right after adding a binary asset is
+  presumed to be this corruption until proven otherwise.
+- PROVEN DEFAULT (2026-08-07, Cartino v0.1.9): option (a) base64+decode is the
+  only asset pipeline verified end-to-end in AI Studio (device-verified
+  Vazirmatn, zero binaries in git). Direct `.ttf` commits caused a launch
+  crash and are classified as a security-adjacent defect.
+
 ---
 
 ## 16. Verified State Record (living, per-repository)
@@ -733,10 +758,10 @@ ANY repository with zero edits:
 - Release channel: stable per push (prerelease: false)
 - Gradle execution: system gradle fallback
 - Wrapper policy: wrapper forbidden due to web-IDE binary corruption
+- Font pipeline: Vazirmatn via base64 TEXT in app/fontsrc/ + build-time decode (verified 2026-08-07)
 - Last verified OTA update test: v0.1.2 -> v1.0.0, 2026-08-07
 - Key rotation history: (none — fresh public launch; no legacy committed key)
 ```
----
 
 ---
 

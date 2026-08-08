@@ -1,6 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,17 +17,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -45,15 +47,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BankCard
-import com.example.util.IranianBank
 import com.example.util.IranianBankHelper
 import com.example.util.ParsedCardData
 import com.example.util.TextPreprocessor
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddEditCardDialog(
     initialCard: BankCard? = null,
@@ -61,6 +64,8 @@ fun AddEditCardDialog(
     onDismiss: () -> Unit,
     onSave: (BankCard) -> Unit
 ) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     var cardNumber by remember {
         mutableStateOf(
             scannedData?.cardNumber ?: initialCard?.cardNumber ?: ""
@@ -131,27 +136,235 @@ fun AddEditCardDialog(
     val startColor = runCatching { Color(android.graphics.Color.parseColor(detectedBank.colorStartHex)) }.getOrDefault(Color(0xFF1E293B))
     val endColor = runCatching { Color(android.graphics.Color.parseColor(detectedBank.colorEndHex)) }.getOrDefault(Color(0xFF334155))
 
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        confirmButton = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
+        sheetState = sheetState,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Sheet Title
+            Text(
+                text = if (initialCard != null) "ویرایش کارت بانکی" else "افزودن کارت بانکی جدید",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Live Bank Preview Badge
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                OutlinedButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(12.dp),
+                Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                        .fillMaxWidth()
+                        .background(Brush.linearGradient(listOf(startColor, endColor)))
+                        .padding(14.dp)
                 ) {
-                    Text("انصراف", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Column {
+                        Text(
+                            text = "شناسایی هوشمند بانک: ${detectedBank.name}",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = "رنگ برند و لوگوی کارت به صورت خودکار اعمال شد",
+                            color = Color.White.copy(alpha = 0.8f),
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+
+            // Card Number Input
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                OutlinedTextField(
+                    value = cardNumber,
+                    onValueChange = { cardNumber = it },
+                    label = { Text("شماره ۱۶ رقمی کارت") },
+                    placeholder = { Text("6037991812345678") },
+                    singleLine = true,
+                    isError = cardNumberError != null,
+                    supportingText = {
+                        cardNumberError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Editable Bank Name
+            OutlinedTextField(
+                value = customBankName,
+                onValueChange = { customBankName = it },
+                label = { Text("نام بانک (قابل ویرایش)") },
+                placeholder = { Text("مثال: ملی، سامان، رسالت...") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Card Holder Name
+            OutlinedTextField(
+                value = cardHolderName,
+                onValueChange = { cardHolderName = it },
+                label = { Text("نام صاحب کارت") },
+                placeholder = { Text("مثال: علی محمدی") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // IBAN Input (شماره شبا)
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                OutlinedTextField(
+                    value = iban,
+                    onValueChange = { iban = it },
+                    label = { Text("شماره شبا (IBAN)") },
+                    placeholder = { Text("IR120170000000123456789012") },
+                    singleLine = true,
+                    isError = ibanError != null,
+                    supportingText = {
+                        ibanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Expiry Date (Year / Month) & CVV2 Row
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = expiryMonth,
+                        onValueChange = { expiryMonth = it },
+                        label = { Text("ماه انقضا") },
+                        placeholder = { Text("08") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    OutlinedTextField(
+                        value = expiryYear,
+                        onValueChange = { expiryYear = it },
+                        label = { Text("سال انقضا") },
+                        placeholder = { Text("06 یا 1406") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    OutlinedTextField(
+                        value = cvv2,
+                        onValueChange = { cvv2 = it },
+                        label = { Text("CVV2") },
+                        placeholder = { Text("382") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            // Account Number
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                OutlinedTextField(
+                    value = accountNumber,
+                    onValueChange = { accountNumber = it },
+                    label = { Text("شماره حساب (اختیاری)") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Notes
+            OutlinedTextField(
+                value = notes,
+                onValueChange = { notes = it },
+                label = { Text("یادداشت (اختیاری)") },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // Dynamic Custom Fields Section
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "فیلدهای اختصاصی دلخواه:",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    OutlinedButton(
+                        onClick = { customFieldsList.add(Pair("", "")) }
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("افزودن فیلد جدید")
+                    }
                 }
 
+                customFieldsList.indices.forEach { index ->
+                    val (fieldLabel, fieldValue) = customFieldsList[index]
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = fieldLabel,
+                            onValueChange = { newLabel ->
+                                customFieldsList[index] = Pair(newLabel, fieldValue)
+                            },
+                            label = { Text("عنوان فیلد") },
+                            placeholder = { Text("مثال: رمز دوم") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        OutlinedTextField(
+                            value = fieldValue,
+                            onValueChange = { newValue ->
+                                customFieldsList[index] = Pair(fieldLabel, newValue)
+                            },
+                            label = { Text("مقدار") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        IconButton(
+                            onClick = { customFieldsList.removeAt(index) }
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Remove Field", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Action Buttons
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(
                     onClick = {
                         val cleanCardNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(cardNumber).replace(" ", "").replace("-", "")
@@ -194,227 +407,20 @@ fun AddEditCardDialog(
                     enabled = cardNumber.isNotBlank() && cardNumberError == null,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
+                        .fillMaxWidth()
+                        .height(50.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
-                    Text("ذخیره کارت", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("ذخیره کارت", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
-            }
-        },
-        dismissButton = null,
-        title = {
-            Text(
-                text = if (initialCard != null) "ویرایش کارت بانکی" else "افزودن کارت بانکی جدید",
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Live Bank Preview Badge
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
+
+                TextButton(
+                    onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Brush.linearGradient(listOf(startColor, endColor)))
-                            .padding(14.dp)
-                    ) {
-                        Column {
-                            Text(
-                                text = "شناسایی هوشمند بانک: ${detectedBank.name}",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                            Text(
-                                text = "رنگ برند و لوگوی کارت به صورت خودکار اعمال شد",
-                                color = Color.White.copy(alpha = 0.8f),
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
-                }
-
-                // Card Number Input
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    OutlinedTextField(
-                        value = cardNumber,
-                        onValueChange = { cardNumber = it },
-                        label = { Text("شماره ۱۶ رقمی کارت") },
-                        placeholder = { Text("6037991812345678") },
-                        singleLine = true,
-                        isError = cardNumberError != null,
-                        supportingText = {
-                            cardNumberError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                        },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Editable Bank Name
-                OutlinedTextField(
-                    value = customBankName,
-                    onValueChange = { customBankName = it },
-                    label = { Text("نام بانک (قابل ویرایش)") },
-                    placeholder = { Text("مثال: ملی، سامان، رسالت...") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Card Holder Name
-                OutlinedTextField(
-                    value = cardHolderName,
-                    onValueChange = { cardHolderName = it },
-                    label = { Text("نام صاحب کارت") },
-                    placeholder = { Text("مثال: علی محمدی") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // IBAN Input (شماره شبا)
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    OutlinedTextField(
-                        value = iban,
-                        onValueChange = { iban = it },
-                        label = { Text("شماره شبا (IBAN)") },
-                        placeholder = { Text("IR120170000000123456789012") },
-                        singleLine = true,
-                        isError = ibanError != null,
-                        supportingText = {
-                            ibanError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Expiry Date (Year / Month) & CVV2 Row
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = expiryMonth,
-                            onValueChange = { expiryMonth = it },
-                            label = { Text("ماه انقضا") },
-                            placeholder = { Text("08") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        OutlinedTextField(
-                            value = expiryYear,
-                            onValueChange = { expiryYear = it },
-                            label = { Text("سال انقضا") },
-                            placeholder = { Text("06 یا 1406") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        OutlinedTextField(
-                            value = cvv2,
-                            onValueChange = { cvv2 = it },
-                            label = { Text("CVV2") },
-                            placeholder = { Text("382") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                // Account Number
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    OutlinedTextField(
-                        value = accountNumber,
-                        onValueChange = { accountNumber = it },
-                        label = { Text("شماره حساب (اختیاری)") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Notes
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text("یادداشت (اختیاری)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Dynamic Custom Fields Section
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "فیلدهای اختصاصی دلخواه:",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        OutlinedButton(
-                            onClick = { customFieldsList.add(Pair("", "")) }
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("افزودن فیلد جدید")
-                        }
-                    }
-
-                    customFieldsList.indices.forEach { index ->
-                        val (fieldLabel, fieldValue) = customFieldsList[index]
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedTextField(
-                                value = fieldLabel,
-                                onValueChange = { newLabel ->
-                                    customFieldsList[index] = Pair(newLabel, fieldValue)
-                                },
-                                label = { Text("عنوان فیلد") },
-                                placeholder = { Text("مثال: رمز دوم") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            OutlinedTextField(
-                                value = fieldValue,
-                                onValueChange = { newValue ->
-                                    customFieldsList[index] = Pair(fieldLabel, newValue)
-                                },
-                                label = { Text("مقدار") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            IconButton(
-                                onClick = { customFieldsList.removeAt(index) }
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = "Remove Field", tint = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
+                    Text("انصراف", fontWeight = FontWeight.Medium, fontSize = 14.sp)
                 }
             }
         }
-    )
+    }
 }
