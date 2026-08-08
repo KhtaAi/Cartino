@@ -5,6 +5,12 @@ import androidx.room.PrimaryKey
 import com.example.util.SecurityManager
 import java.util.UUID
 
+data class CustomCardField(
+    val label: String = "",
+    val value: String = "",
+    val isHidden: Boolean = false
+)
+
 @Entity(tableName = "bank_cards")
 data class BankCard(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
@@ -36,22 +42,25 @@ data class BankCard(
         iban = SecurityManager.decryptField(iban)
     )
 
-    fun getCustomFields(): List<Pair<String, String>> {
+    fun getCustomFields(): List<CustomCardField> {
         if (customFieldsJson.isBlank()) return emptyList()
         return customFieldsJson.split("\n")
             .mapNotNull { line ->
-                val parts = line.split(":::", limit = 2)
-                if (parts.size == 2 && parts[0].isNotBlank()) {
-                    Pair(parts[0].trim(), parts[1].trim())
+                val parts = line.split(":::")
+                if (parts.size >= 2 && parts[0].isNotBlank()) {
+                    val label = parts[0].trim()
+                    val value = parts[1].trim()
+                    val isHidden = if (parts.size >= 3) parts[2].trim().toBooleanStrictOrNull() ?: false else false
+                    CustomCardField(label = label, value = value, isHidden = isHidden)
                 } else null
             }
     }
 
     companion object {
-        fun encodeCustomFields(fields: List<Pair<String, String>>): String {
+        fun encodeCustomFields(fields: List<CustomCardField>): String {
             return fields
-                .filter { it.first.isNotBlank() }
-                .joinToString("\n") { "${it.first.trim()}:::${it.second.trim()}" }
+                .filter { it.label.isNotBlank() }
+                .joinToString("\n") { "${it.label.trim()}:::${it.value.trim()}:::${it.isHidden}" }
         }
     }
 }

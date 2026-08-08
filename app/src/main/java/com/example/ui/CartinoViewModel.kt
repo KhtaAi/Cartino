@@ -1,6 +1,7 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -23,6 +24,12 @@ import kotlinx.coroutines.launch
 
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+
+data class CloudDriveConfig(
+    val folderUri: String = "",
+    val folderName: String = "",
+    val lastBackupTime: String = ""
+)
 
 sealed class SyncUiState {
     object Idle : SyncUiState()
@@ -190,6 +197,15 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         )
     )
     val webDavConfig: StateFlow<WebDavConfig> = _webDavConfig.asStateFlow()
+
+    private val _cloudDriveConfig = MutableStateFlow(
+        CloudDriveConfig(
+            folderUri = safeGetEncryptedString("cloud_drive_folder_uri", ""),
+            folderName = safeGetEncryptedString("cloud_drive_folder_name", ""),
+            lastBackupTime = safeGetEncryptedString("cloud_drive_last_backup", "")
+        )
+    )
+    val cloudDriveConfig: StateFlow<CloudDriveConfig> = _cloudDriveConfig.asStateFlow()
 
     init {
         // Migrate legacy plain shared preferences passwords if present
@@ -372,6 +388,87 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 _syncState.value = SyncUiState.Success("بازیابی از سرور WebDAV با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "خطا در دریافت فایل از WebDAV")
+            }
+        }
+    }
+
+    fun setCloudDriveFolder(uri: Uri, folderName: String) {
+        try {
+            val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            getApplication<Application>().contentResolver.takePersistableUriPermission(uri, takeFlags)
+        } catch (e: SecurityException) {
+            SyncLogger.log("CLOUD_DRIVE", "هشدار در دریافت مجوز پایدار: ${e.message}")
+        } catch (e: Exception) {
+            SyncLogger.log("CLOUD_DRIVE", "خطا در ثبت مجوز: ${e.message}")
+        }
+        val nameToUse = folderName.ifBlank { uri.lastPathSegment ?: "پوشه ابری" }
+        val updated = _cloudDriveConfig.value.copy(
+            folderUri = uri.toString(),
+            folderName = nameToUse
+        )
+        _cloudDriveConfig.value = updated
+        safePutEncryptedString("cloud_drive_folder_uri", updated.folderUri)
+        safePutEncryptedString("cloud_drive_folder_name", updated.folderName)
+        SyncLogger.log("CLOUD_DRIVE", "پوشه ابری تنظیم شد: ${updated.folderName}")
+    }
+
+    fun backupToCloudDrive(password: String) {
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            val config = _cloudDriveConfig.value
+            if (config.folderUri.isBlank()) {
+                _syncState.value = SyncUiState.Error("لطفاً ابتدا پوشه مورد نظر را در گوگل‌درایو / فضای ابری انتخاب کنید")
+                return@launch
+            }
+            val effectivePassword = password.ifBlank { _masterEncryptionPassword.value }
+            if (effectivePassword.isBlank()) {
+                _syncState.value = SyncUiState.Error("لطفاً کلمه عبور رمزنگاری را در تنظیمات ثبت کنید")
+                return@launch
+            }
+            runCatching {
+                val uri = Uri.parse(config.folderUri)
+                BackupSyncManager.createEncryptedBackupToCloudTreeUri(getApplication(), uri, effectivePassword)
+            }.onSuccess { timeStr ->
+                val updatedConfig = _cloudDriveConfig.value.copy(lastBackupTime = timeStr)
+                _cloudDriveConfig.value = updatedConfig
+                safePutEncryptedString("cloud_drive_last_backup", timeStr)
+                _syncState.value = SyncUiState.Success("پشتیبان‌گیری ابری با موفقیت در پوشه ${config.folderName} ذخیره شد")
+            }.onFailure { err ->
+                val msg = if (err is SecurityException) {
+                    "دسترسی به پوشه ابری لغو شده یا نامعتبر است. لطفاً دوباره پوشه را انتخاب کنید."
+                } else {
+                    err.localizedMessage ?: "خطا در پشتیبان‌گیری ابری"
+                }
+                _syncState.value = SyncUiState.Error(msg)
+            }
+        }
+    }
+
+    fun restoreFromCloudDrive(password: String) {
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            val config = _cloudDriveConfig.value
+            if (config.folderUri.isBlank()) {
+                _syncState.value = SyncUiState.Error("لطفاً ابتدا پوشه مورد نظر را در گوگل‌درایو / فضای ابری انتخاب کنید")
+                return@launch
+            }
+            val effectivePassword = password.ifBlank { _masterEncryptionPassword.value }
+            if (effectivePassword.isBlank()) {
+                _syncState.value = SyncUiState.Error("لطفاً کلمه عبور رمزنگاری را در تنظیمات ثبت کنید")
+                return@launch
+            }
+            runCatching {
+                val uri = Uri.parse(config.folderUri)
+                BackupSyncManager.restoreFromCloudTreeUri(getApplication(), uri, effectivePassword)
+            }.onSuccess { (cardsCount, docsCount) ->
+                _syncState.value = SyncUiState.Success("بازیابی از گوگل‌درایو / فضای ابری با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
+            }.onFailure { err ->
+                val msg = if (err is SecurityException) {
+                    "دسترسی به پوشه ابری لغو شده یا نامعتبر است. لطفاً دوباره پوشه را انتخاب کنید."
+                } else {
+                    err.localizedMessage ?: "خطا در بازیابی از پوشه ابری"
+                }
+                _syncState.value = SyncUiState.Error(msg)
             }
         }
     }

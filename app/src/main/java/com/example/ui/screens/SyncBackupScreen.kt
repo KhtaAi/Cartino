@@ -78,9 +78,13 @@ import com.example.ui.theme.VazirmatnFontFamily
 import com.example.util.SyncLogger
 import com.example.util.WebDavConfig
 
+import androidx.compose.material.icons.filled.Cloud
+import androidx.documentfile.provider.DocumentFile
+
 enum class BackupTarget {
     LOCAL_FILE,
-    WEBDAV
+    WEBDAV,
+    CLOUD_DRIVE
 }
 
 enum class ActionType {
@@ -97,6 +101,7 @@ fun SyncBackupScreen(
     val clipboardManager = LocalClipboardManager.current
     val syncState by viewModel.syncState.collectAsState()
     val webDavConfig by viewModel.webDavConfig.collectAsState()
+    val cloudDriveConfig by viewModel.cloudDriveConfig.collectAsState()
     val masterPassword by viewModel.masterEncryptionPassword.collectAsState()
     val logs by SyncLogger.logs.collectAsState()
 
@@ -114,6 +119,30 @@ fun SyncBackupScreen(
     var remoteFileNameInput by remember(webDavConfig) { mutableStateOf(webDavConfig.remotePath) }
 
     var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
+
+    // Cloud Drive SAF Folder Picker Launcher
+    val openCloudTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        uri?.let { folderUri ->
+            val folderDoc = DocumentFile.fromTreeUri(context, folderUri)
+            val name = folderDoc?.name ?: folderUri.lastPathSegment ?: "پوشه ابری"
+            viewModel.setCloudDriveFolder(folderUri, name)
+            Toast.makeText(context, "پوشه $name با موفقیت انتخاب شد", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Cloud Drive Specific File Picker Launcher
+    val openSpecificCloudEncLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let { fileUri ->
+            pendingRestoreUri = fileUri
+            activeTarget = BackupTarget.LOCAL_FILE
+            activeAction = ActionType.RESTORE
+            showPasswordDialog = true
+        }
+    }
 
     // SAF Create File Launcher (Local Backup to phone internal/external storage)
     val createDocumentLauncher = rememberLauncherForActivityResult(
@@ -220,7 +249,136 @@ fun SyncBackupScreen(
             SyncUiState.Idle -> {}
         }
 
-        // Section 1: WebDAV Personal Server
+        // Section 1: Google Drive / Cloud Storage (SAF)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Cloud, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "پشتیبان‌گیری گوگل‌درایو / فضای ابری",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Status Information Box
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "پوشه انتخاب‌شده: ",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (cloudDriveConfig.folderName.isNotBlank()) cloudDriveConfig.folderName else "انتخاب نشده",
+                                fontSize = 13.sp,
+                                color = if (cloudDriveConfig.folderName.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "آخرین پشتیبان‌گیری: ",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (cloudDriveConfig.lastBackupTime.isNotBlank()) cloudDriveConfig.lastBackupTime else "ثبت نشده",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = {
+                        openCloudTreeLauncher.launch(null)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("انتخاب پوشه در درایو")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            if (cloudDriveConfig.folderUri.isBlank()) {
+                                Toast.makeText(context, "لطفاً ابتدا پوشه مورد نظر را در گوگل‌درایو / فضای ابری انتخاب کنید", Toast.LENGTH_LONG).show()
+                            } else {
+                                activeTarget = BackupTarget.CLOUD_DRIVE
+                                activeAction = ActionType.BACKUP
+                                showPasswordDialog = true
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("پشتیبان‌گیری", maxLines = 1, softWrap = false)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            if (cloudDriveConfig.folderUri.isBlank()) {
+                                Toast.makeText(context, "لطفاً ابتدا پوشه مورد نظر را در گوگل‌درایو / فضای ابری انتخاب کنید", Toast.LENGTH_LONG).show()
+                            } else {
+                                activeTarget = BackupTarget.CLOUD_DRIVE
+                                activeAction = ActionType.RESTORE
+                                showPasswordDialog = true
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                    ) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("بازیابی", maxLines = 1, softWrap = false)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                TextButton(
+                    onClick = {
+                        openSpecificCloudEncLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                    },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                ) {
+                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("بازیابی از فایل پشتیبان مشخص (.enc)...", fontSize = 12.sp)
+                }
+            }
+        }
+
+        // Section 2: WebDAV Personal Server
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -561,6 +719,13 @@ fun SyncBackupScreen(
                                     } else {
                                         viewModel.restoreLocalBackupFromUri(uri, effectivePwd)
                                     }
+                                }
+                            }
+                            BackupTarget.CLOUD_DRIVE -> {
+                                if (activeAction == ActionType.BACKUP) {
+                                    viewModel.backupToCloudDrive(effectivePwd)
+                                } else {
+                                    viewModel.restoreFromCloudDrive(effectivePwd)
                                 }
                             }
                         }

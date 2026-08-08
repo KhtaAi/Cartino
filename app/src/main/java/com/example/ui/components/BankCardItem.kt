@@ -34,6 +34,9 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
+import com.example.data.model.CustomCardField
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -600,35 +603,11 @@ fun BankCardItem(
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White.copy(alpha = 0.8f)
                                 )
-                                customFields.forEach { (label, value) ->
-                                    Surface(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                copyToClipboard(label, value, "$label کپی شد")
-                                            },
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = Color.Black.copy(alpha = 0.25f)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "$label: $value",
-                                                fontSize = 12.sp,
-                                                color = Color.White,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Icon(
-                                                imageVector = Icons.Default.ContentCopy,
-                                                contentDescription = "Copy $label",
-                                                tint = Color.White.copy(alpha = 0.8f),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
+                                customFields.forEach { field ->
+                                    CardCustomValueRow(
+                                        field = field,
+                                        onCopy = { label, value -> copyToClipboard(label, value, "$label کپی شد") }
+                                    )
                                 }
                             }
 
@@ -660,3 +639,62 @@ fun BankCardItem(
         }
     }
 }
+
+@Composable
+private fun CardCustomValueRow(
+    field: CustomCardField,
+    onCopy: (String, String) -> Unit
+) {
+    var isRevealed by remember { mutableStateOf(false) }
+    val displayValue = if (field.isHidden && !isRevealed) "••••••" else field.value
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCopy(field.label, field.value) },
+        shape = RoundedCornerShape(8.dp),
+        color = Color.Black.copy(alpha = 0.25f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${field.label}: $displayValue",
+                fontSize = 12.sp,
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (field.isHidden) {
+                    IconButton(
+                        onClick = { isRevealed = !isRevealed },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isRevealed) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                            contentDescription = if (isRevealed) "پنهان کردن" else "نمایش",
+                            tint = Color.White.copy(alpha = 0.85f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = { onCopy(field.label, field.value) },
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy ${field.label}",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+

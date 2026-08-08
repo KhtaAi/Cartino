@@ -49,8 +49,8 @@ android {
     namespace = "com.example"
     compileSdk = 36
 
-    val autoVersionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: System.getenv("VERSION_CODE")?.toIntOrNull() ?: project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 20
-    val autoVersionName = (findProperty("versionName") as String?) ?: System.getenv("VERSION_NAME") ?: project.findProperty("VERSION_NAME")?.toString() ?: "1.0.20"
+    val autoVersionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: System.getenv("VERSION_CODE")?.toIntOrNull() ?: project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 23
+    val autoVersionName = (findProperty("versionName") as String?) ?: System.getenv("VERSION_NAME") ?: project.findProperty("VERSION_NAME")?.toString() ?: "1.0.23"
 
     defaultConfig {
         applicationId = "com.aistudio.cartino.app"
@@ -155,6 +155,7 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.mlkit.text.recognition)
     implementation(libs.androidx.security.crypto)
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation(libs.firebase.appcheck.recaptcha)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)

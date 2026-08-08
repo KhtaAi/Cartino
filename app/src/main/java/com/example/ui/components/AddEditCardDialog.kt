@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,6 +19,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -28,6 +32,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -48,11 +55,14 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.BankCard
+import com.example.data.model.CustomCardField
 import com.example.ui.theme.VazirmatnFontFamily
 import com.example.util.IranianBankHelper
 import com.example.util.ParsedCardData
@@ -98,8 +108,8 @@ fun AddEditCardDialog(
     var accountNumber by remember { mutableStateOf(initialCard?.accountNumber ?: "") }
     var notes by remember { mutableStateOf(initialCard?.notes ?: "") }
 
-    val customFieldsList: SnapshotStateList<Pair<String, String>> = remember {
-        mutableStateListOf<Pair<String, String>>().apply {
+    val customFieldsList: SnapshotStateList<CustomCardField> = remember {
+        mutableStateListOf<CustomCardField>().apply {
             initialCard?.getCustomFields()?.let { addAll(it) }
         }
     }
@@ -317,7 +327,7 @@ fun AddEditCardDialog(
                             fontWeight = FontWeight.Bold
                         )
                         OutlinedButton(
-                            onClick = { customFieldsList.add(Pair("", "")) }
+                            onClick = { customFieldsList.add(CustomCardField(label = "", value = "", isHidden = false)) }
                         ) {
                             Icon(Icons.Default.Add, contentDescription = null)
                             Spacer(modifier = Modifier.width(4.dp))
@@ -325,40 +335,13 @@ fun AddEditCardDialog(
                         }
                     }
 
-                    customFieldsList.indices.forEach { index ->
-                        val (fieldLabel, fieldValue) = customFieldsList[index]
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedTextField(
-                                value = fieldLabel,
-                                onValueChange = { newLabel ->
-                                    customFieldsList[index] = Pair(newLabel, fieldValue)
-                                },
-                                label = { Text("عنوان فیلد") },
-                                placeholder = { Text("مثال: رمز دوم") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            OutlinedTextField(
-                                value = fieldValue,
-                                onValueChange = { newValue ->
-                                    customFieldsList[index] = Pair(fieldLabel, newValue)
-                                },
-                                label = { Text("مقدار") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            IconButton(
-                                onClick = { customFieldsList.removeAt(index) }
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = "Remove Field", tint = MaterialTheme.colorScheme.error)
-                            }
-                        }
+                    customFieldsList.forEachIndexed { index, field ->
+                        CardCustomFieldEditorItem(
+                            index = index,
+                            field = field,
+                            onUpdate = { updatedField -> customFieldsList[index] = updatedField },
+                            onDelete = { customFieldsList.removeAt(index) }
+                        )
                     }
                 }
 
@@ -434,6 +417,103 @@ fun AddEditCardDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CardCustomFieldEditorItem(
+    index: Int,
+    field: CustomCardField,
+    onUpdate: (CustomCardField) -> Unit,
+    onDelete: () -> Unit
+) {
+    var isPasswordVisible by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (field.label.isNotBlank()) "فیلد اختصاصی: ${field.label}" else "فیلد اختصاصی شماره ${index + 1}",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelLarge
+                )
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "حذف فیلد",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            // Selection control: Normal vs Hidden
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = !field.isHidden,
+                    onClick = { onUpdate(field.copy(isHidden = false)) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = {}
+                ) {
+                    Text("نمایش عادی", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
+                SegmentedButton(
+                    selected = field.isHidden,
+                    onClick = { onUpdate(field.copy(isHidden = true)) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = {}
+                ) {
+                    Text("نمایش مخفی (مانند رمز)", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+
+            OutlinedTextField(
+                value = field.label,
+                onValueChange = { newLabel -> onUpdate(field.copy(label = newLabel)) },
+                label = { Text("عنوان فیلد") },
+                placeholder = { Text("مثال: رمز دوم") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = field.value,
+                onValueChange = { newValue -> onUpdate(field.copy(value = newValue)) },
+                label = { Text("مقدار فیلد") },
+                singleLine = true,
+                visualTransformation = if (field.isHidden && !isPasswordVisible) PasswordVisualTransformation() else VisualTransformation.None,
+                trailingIcon = if (field.isHidden) {
+                    {
+                        IconButton(
+                            onClick = { isPasswordVisible = !isPasswordVisible },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPasswordVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = if (isPasswordVisible) "پنهان کردن" else "نمایش"
+                            )
+                        }
+                    }
+                } else null,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

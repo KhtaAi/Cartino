@@ -31,6 +31,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FlipToBack
 import androidx.compose.material.icons.filled.FlipToFront
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -312,6 +314,7 @@ fun DocumentCardItem(
                                 DocValueRow(
                                     label = cf.label,
                                     value = cf.value,
+                                    isHidden = cf.isHidden,
                                     onCopy = { copyToClipboard(cf.label, cf.value) }
                                 )
                             }
@@ -450,6 +453,7 @@ fun DocumentCardItem(
                                 DocValueRow(
                                     label = cf.label,
                                     value = cf.value,
+                                    isHidden = cf.isHidden,
                                     onCopy = { copyToClipboard(cf.label, cf.value) }
                                 )
                             }
@@ -466,8 +470,12 @@ fun DocValueRow(
     label: String,
     value: String,
     isValid: Boolean = false,
+    isHidden: Boolean = false,
     onCopy: () -> Unit
 ) {
+    var isRevealed by remember { mutableStateOf(false) }
+    val displayValue = if (isHidden && !isRevealed) "••••••" else value
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -476,15 +484,15 @@ fun DocValueRow(
         color = MaterialTheme.colorScheme.surface
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(text = label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = value,
+                        text = displayValue,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -500,12 +508,32 @@ fun DocValueRow(
                 }
             }
 
-            Icon(
-                imageVector = Icons.Default.ContentCopy,
-                contentDescription = "Copy $label",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isHidden) {
+                    IconButton(
+                        onClick = { isRevealed = !isRevealed },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isRevealed) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                            contentDescription = if (isRevealed) "پنهان کردن" else "نمایش",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onCopy,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentCopy,
+                        contentDescription = "Copy $label",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
         }
     }
 }

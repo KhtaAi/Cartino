@@ -17,6 +17,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -50,6 +52,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -311,53 +315,11 @@ fun AddEditDocumentDialog(
                                 customFields[index] = customFields[index].copy(side = newSide)
                             }
                         ) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("اطلاعات فیلد سفارشی", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
-                                        IconButton(
-                                            onClick = { customFields.removeAt(index) },
-                                            modifier = Modifier.size(28.dp)
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = "حذف فیلد",
-                                                tint = MaterialTheme.colorScheme.error,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    OutlinedTextField(
-                                        value = field.label,
-                                        onValueChange = { newLabel ->
-                                            customFields[index] = customFields[index].copy(label = newLabel)
-                                        },
-                                        label = { Text("نام فیلد (مثال: نام پدر / گروه خونی)") },
-                                        singleLine = true,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    OutlinedTextField(
-                                        value = field.value,
-                                        onValueChange = { newValue ->
-                                            customFields[index] = customFields[index].copy(value = newValue)
-                                        },
-                                        label = { Text("مقدار فیلد") },
-                                        singleLine = true,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-                            }
+                            CustomDocFieldEditorContent(
+                                field = field,
+                                onUpdate = { updated -> customFields[index] = updated },
+                                onDelete = { customFields.removeAt(index) }
+                            )
                         }
                     }
                 }
@@ -486,3 +448,95 @@ fun DocumentFieldItem(
         content()
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CustomDocFieldEditorContent(
+    field: CustomDocField,
+    onUpdate: (CustomDocField) -> Unit,
+    onDelete: () -> Unit
+) {
+    var isPasswordVisible by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("اطلاعات فیلد سفارشی", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "حذف فیلد",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            // Selection control: Normal vs Hidden
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = !field.isHidden,
+                    onClick = { onUpdate(field.copy(isHidden = false)) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    icon = {}
+                ) {
+                    Text("نمایش عادی", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
+                SegmentedButton(
+                    selected = field.isHidden,
+                    onClick = { onUpdate(field.copy(isHidden = true)) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    icon = {}
+                ) {
+                    Text("نمایش مخفی (مانند رمز)", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+
+            OutlinedTextField(
+                value = field.label,
+                onValueChange = { newLabel -> onUpdate(field.copy(label = newLabel)) },
+                label = { Text("نام فیلد (مثال: نام پدر / گروه خونی)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = field.value,
+                onValueChange = { newValue -> onUpdate(field.copy(value = newValue)) },
+                label = { Text("مقدار فیلد") },
+                singleLine = true,
+                visualTransformation = if (field.isHidden && !isPasswordVisible) PasswordVisualTransformation() else VisualTransformation.None,
+                trailingIcon = if (field.isHidden) {
+                    {
+                        IconButton(
+                            onClick = { isPasswordVisible = !isPasswordVisible },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPasswordVisible) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = if (isPasswordVisible) "پنهان کردن" else "نمایش"
+                            )
+                        }
+                    }
+                } else null,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+

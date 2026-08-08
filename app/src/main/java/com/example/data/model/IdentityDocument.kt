@@ -20,7 +20,8 @@ data class CustomDocField(
     val id: String = UUID.randomUUID().toString(),
     val label: String = "",
     val value: String = "",
-    val side: String = "FRONT" // "FRONT" or "BACK"
+    val side: String = "FRONT", // "FRONT" or "BACK"
+    val isHidden: Boolean = false
 )
 
 @Entity(tableName = "identity_documents")
