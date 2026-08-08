@@ -182,6 +182,19 @@ dependencies {
     "ksp"(libs.moshi.kotlin.codegen)
 }
 
+val decodeVazirmatnFonts = tasks.register("decodeVazirmatnFonts") {
+    val srcDir = file("fontsrc")
+    val outDir = file("src/main/res/font")
+    doLast {
+        outDir.mkdirs()
+        srcDir.listFiles { f -> f.extension == "b64" }?.forEach { b64 ->
+            val clean = b64.readText().replace("\n", "").replace("\r", "").trim()
+            File(outDir, b64.nameWithoutExtension + ".ttf").writeBytes(Base64.getDecoder().decode(clean))
+        }
+    }
+}
+tasks.configureEach { if (name == "preBuild") dependsOn(decodeVazirmatnFonts) }
+
 val buildDirProvider = layout.buildDirectory
 tasks.register("copyUniversalToDebug") {
     val buildDir = buildDirProvider

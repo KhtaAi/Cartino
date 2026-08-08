@@ -32,3 +32,6 @@ __NEW_SECRETS.txt
 NEW_SECRETS.txt
 ci.keystore.base64
 ci-signing.env
+
+# Generated font files
+app/src/main/res/font/*.ttf
