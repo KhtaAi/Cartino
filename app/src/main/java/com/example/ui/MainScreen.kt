@@ -98,17 +98,43 @@ fun MainScreen(
     var showScannedDialog by remember { mutableStateOf(false) }
 
     var showExpiryAlertDialog by remember { mutableStateOf(false) }
-    var expiringCardsList by remember { mutableStateOf<List<Pair<BankCard, Int>>>(emptyList()) }
+    var expiringAlerts by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
-    // Check for expiring cards (within 2 Jalali months)
-    LaunchedEffect(cards, isUnlocked) {
-        if (isUnlocked && cards.isNotEmpty()) {
-            val expiring = cards.mapNotNull { card ->
-                val status = JalaliCalendarHelper.getCardExpiryStatus(card.expiryYear, card.expiryMonth)
-                if (status != null) card to status else null
+    // Check for expiring cards and documents
+    LaunchedEffect(cards, documents, isUnlocked) {
+        if (isUnlocked) {
+            val alerts = mutableListOf<Pair<String, String>>()
+
+            cards.forEach { card ->
+                val remaining = JalaliCalendarHelper.monthsUntilCardExpiry(card.expiryYear, card.expiryMonth)
+                if (remaining != null && remaining <= card.reminderMonthsBefore) {
+                    val cardTitle = "کارت ${card.bankName} (${card.cardHolderName.ifBlank { if (card.cardNumber.length >= 4) card.cardNumber.takeLast(4) else card.cardNumber }})"
+                    val detail = when {
+                        remaining < 0 -> "${kotlin.math.abs(remaining)} ماه پیش منقضی شده"
+                        remaining == 0 -> "این ماه منقضی می‌شود"
+                        else -> "$remaining ماه دیگر منقضی می‌شود"
+                    }
+                    alerts.add(cardTitle to detail)
+                }
             }
-            if (expiring.isNotEmpty()) {
-                expiringCardsList = expiring
+
+            documents.forEach { doc ->
+                if (doc.expiryDate.isNotBlank()) {
+                    val remaining = JalaliCalendarHelper.monthsUntilJalaliDate(doc.expiryDate)
+                    if (remaining != null && remaining <= doc.reminderMonthsBefore) {
+                        val docTitle = "مدرک ${doc.title}"
+                        val detail = when {
+                            remaining < 0 -> "${kotlin.math.abs(remaining)} ماه پیش منقضی شده"
+                            remaining == 0 -> "این ماه منقضی می‌شود"
+                            else -> "$remaining ماه دیگر منقضی می‌شود"
+                        }
+                        alerts.add(docTitle to detail)
+                    }
+                }
+            }
+
+            if (alerts.isNotEmpty()) {
+                expiringAlerts = alerts
                 showExpiryAlertDialog = true
             }
         }
@@ -311,7 +337,7 @@ fun MainScreen(
                 )
             }
 
-            if (showExpiryAlertDialog && expiringCardsList.isNotEmpty()) {
+            if (showExpiryAlertDialog && expiringAlerts.isNotEmpty()) {
                 AlertDialog(
                     onDismissRequest = { showExpiryAlertDialog = false },
                     icon = {
@@ -324,7 +350,7 @@ fun MainScreen(
                     },
                     title = {
                         Text(
-                            text = "هشدار تاریخ انقضای کارت‌های بانکی",
+                            text = "هشدار تاریخ انقضا",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
                         )
@@ -332,12 +358,12 @@ fun MainScreen(
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = "کارت‌های زیر تا دو ماه آینده منقضی می‌شوند. لطفاً جهت تمدید آن‌ها اقدام کنید:",
+                                text = "موارد زیر در آستانه انقضا قرار دارند یا منقضی شده‌اند. لطفاً جهت تمدید آن‌ها اقدام کنید:",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.height(4.dp))
-                            expiringCardsList.forEach { (card, remainingMonths) ->
+                            expiringAlerts.forEach { (title, detail) ->
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
                                     color = MaterialTheme.colorScheme.surfaceVariant,
@@ -348,20 +374,15 @@ fun MainScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Column {
-                                            Text(
-                                                text = "بانک ${card.bankName} (${card.cardHolderName.ifBlank { card.cardNumber.takeLast(4) }})",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp
-                                            )
-                                            Text(
-                                                text = "تاریخ انقضا: ${card.expiryYear}/${card.expiryMonth}",
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
                                         Text(
-                                            text = if (remainingMonths == 0) "منقضی در این ماه" else "منقضی در $remainingMonths ماه آینده",
+                                            text = title,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = detail,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.error

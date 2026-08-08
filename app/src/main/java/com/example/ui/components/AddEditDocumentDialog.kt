@@ -1,7 +1,9 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,8 +16,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -42,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +88,10 @@ fun AddEditDocumentDialog(
     var documentNumber by remember { mutableStateOf(initialDocument?.documentNumber ?: "") }
     var issueDate by remember { mutableStateOf(initialDocument?.issueDate ?: "") }
     var expiryDate by remember { mutableStateOf(initialDocument?.expiryDate ?: "") }
+    var reminderMonths by remember { mutableIntStateOf(initialDocument?.reminderMonthsBefore ?: 2) }
+    var isReminderDropdownExpanded by remember { mutableStateOf(false) }
+    var showIssueDatePicker by remember { mutableStateOf(false) }
+    var showExpiryDatePicker by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf(initialDocument?.notes ?: "") }
 
     // Placements for default fields (key -> "FRONT" or "BACK")
@@ -231,19 +240,77 @@ fun AddEditDocumentDialog(
                     )
                 }
 
+                // Date Picker Dialogs
+                if (showIssueDatePicker) {
+                    val cleanIssue = TextPreprocessor.convertPersianArabicDigitsToEnglish(issueDate).trim()
+                    val parts = cleanIssue.split("/", "-", ".").mapNotNull { it.toIntOrNull() }
+                    val initialY = if (parts.isNotEmpty() && parts[0] > 0) (if (parts[0] < 100) 1400 + parts[0] else parts[0]) else null
+                    val initialM = if (parts.size >= 2) parts[1] else null
+                    val initialD = if (parts.size >= 3) parts[2] else null
+
+                    JalaliDatePickerDialog(
+                        initialYear = initialY,
+                        initialMonth = initialM,
+                        initialDay = initialD,
+                        showDay = true,
+                        onDismiss = { showIssueDatePicker = false },
+                        onSelect = { y, m, d ->
+                            issueDate = "$y/${m.toString().padStart(2, '0')}/${d.toString().padStart(2, '0')}"
+                            showIssueDatePicker = false
+                        }
+                    )
+                }
+
+                if (showExpiryDatePicker) {
+                    val cleanExpiry = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryDate).trim()
+                    val parts = cleanExpiry.split("/", "-", ".").mapNotNull { it.toIntOrNull() }
+                    val initialY = if (parts.isNotEmpty() && parts[0] > 0) (if (parts[0] < 100) 1400 + parts[0] else parts[0]) else null
+                    val initialM = if (parts.size >= 2) parts[1] else null
+                    val initialD = if (parts.size >= 3) parts[2] else null
+
+                    JalaliDatePickerDialog(
+                        initialYear = initialY,
+                        initialMonth = initialM,
+                        initialDay = initialD,
+                        showDay = true,
+                        onDismiss = { showExpiryDatePicker = false },
+                        onSelect = { y, m, d ->
+                            expiryDate = "$y/${m.toString().padStart(2, '0')}/${d.toString().padStart(2, '0')}"
+                            showExpiryDatePicker = false
+                        }
+                    )
+                }
+
                 // Issue Date
                 DocumentFieldItem(
                     label = "تاریخ صدور",
                     side = defaultPlacements["issueDate"] ?: "FRONT",
                     onSideSelected = { defaultPlacements["issueDate"] = it }
                 ) {
-                    OutlinedTextField(
-                        value = issueDate,
-                        onValueChange = { issueDate = it },
-                        placeholder = { Text("1398/04/15") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = issueDate,
+                            onValueChange = {},
+                            readOnly = true,
+                            placeholder = { Text("1398/04/15") },
+                            singleLine = true,
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = { showIssueDatePicker = true },
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Icon(Icons.Default.DateRange, contentDescription = "انتخاب تاریخ صدور")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { showIssueDatePicker = true }
+                        )
+                    }
                 }
 
                 // Expiry Date
@@ -252,13 +319,62 @@ fun AddEditDocumentDialog(
                     side = defaultPlacements["expiryDate"] ?: "FRONT",
                     onSideSelected = { defaultPlacements["expiryDate"] = it }
                 ) {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = expiryDate,
+                            onValueChange = {},
+                            readOnly = true,
+                            placeholder = { Text("1408/04/15") },
+                            singleLine = true,
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = { showExpiryDatePicker = true },
+                                    modifier = Modifier.size(48.dp)
+                                ) {
+                                    Icon(Icons.Default.DateRange, contentDescription = "انتخاب تاریخ انقضا")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { showExpiryDatePicker = true }
+                        )
+                    }
+                }
+
+                // Expiry Alert Threshold Dropdown
+                ExposedDropdownMenuBox(
+                    expanded = isReminderDropdownExpanded,
+                    onExpandedChange = { isReminderDropdownExpanded = !isReminderDropdownExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     OutlinedTextField(
-                        value = expiryDate,
-                        onValueChange = { expiryDate = it },
-                        placeholder = { Text("1408/04/15") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        value = "$reminderMonths ماه قبل",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("هشدار انقضا") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isReminderDropdownExpanded) },
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth()
                     )
+                    ExposedDropdownMenu(
+                        expanded = isReminderDropdownExpanded,
+                        onDismissRequest = { isReminderDropdownExpanded = false }
+                    ) {
+                        listOf(1, 2, 3, 6, 12).forEach { monthCount ->
+                            DropdownMenuItem(
+                                text = { Text("$monthCount ماه قبل") },
+                                onClick = {
+                                    reminderMonths = monthCount
+                                    isReminderDropdownExpanded = false
+                                }
+                            )
+                        }
+                    }
                 }
 
                 // Notes
@@ -354,7 +470,8 @@ fun AddEditDocumentDialog(
                                 expiryDate = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryDate),
                                 notes = notes,
                                 customFieldsJson = customFieldsJsonString,
-                                fieldPlacementsJson = fieldPlacementsJsonString
+                                fieldPlacementsJson = fieldPlacementsJsonString,
+                                reminderMonthsBefore = reminderMonths
                             )).copy(
                                 title = title.ifBlank { selectedType.titleFa },
                                 docType = selectedType,
@@ -364,7 +481,8 @@ fun AddEditDocumentDialog(
                                 expiryDate = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryDate),
                                 notes = notes,
                                 customFieldsJson = customFieldsJsonString,
-                                fieldPlacementsJson = fieldPlacementsJsonString
+                                fieldPlacementsJson = fieldPlacementsJsonString,
+                                reminderMonthsBefore = reminderMonths
                             )
 
                             onSave(docToSave)

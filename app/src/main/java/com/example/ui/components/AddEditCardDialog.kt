@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,13 +24,17 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
@@ -47,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -105,11 +111,14 @@ fun AddEditCardDialog(
             scannedData?.expiryMonth ?: initialCard?.expiryMonth ?: ""
         )
     }
+    var showDatePicker by remember { mutableStateOf(false) }
     var cvv2 by remember {
         mutableStateOf(
             scannedData?.cvv2 ?: initialCard?.cvv2 ?: ""
         )
     }
+    var reminderMonths by remember { mutableIntStateOf(initialCard?.reminderMonthsBefore ?: 2) }
+    var isReminderDropdownExpanded by remember { mutableStateOf(false) }
     var accountNumber by remember { mutableStateOf(initialCard?.accountNumber ?: "") }
     var notes by remember { mutableStateOf(initialCard?.notes ?: "") }
 
@@ -304,30 +313,68 @@ fun AddEditCardDialog(
                 }
 
                 // Expiry Date (Year / Month) & CVV2 Row
+                val cleanY = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryYear).trim()
+                val cleanM = TextPreprocessor.convertPersianArabicDigitsToEnglish(expiryMonth).trim()
+                val expiryDisplayText = remember(cleanY, cleanM) {
+                    if (cleanY.isNotBlank() && cleanM.isNotBlank()) {
+                        val fullY = if (cleanY.length == 2) "14$cleanY" else cleanY
+                        val padM = cleanM.padStart(2, '0')
+                        "$fullY/$padM"
+                    } else if (cleanY.isNotBlank()) {
+                        if (cleanY.length == 2) "14$cleanY" else cleanY
+                    } else ""
+                }
+
+                if (showDatePicker) {
+                    val parsedY = cleanY.toIntOrNull()?.let { if (it < 100) 1400 + it else it }
+                    val parsedM = cleanM.toIntOrNull()
+                    JalaliDatePickerDialog(
+                        initialYear = parsedY,
+                        initialMonth = parsedM,
+                        showDay = false,
+                        onDismiss = { showDatePicker = false },
+                        onSelect = { y, m, _ ->
+                            expiryYear = y.toString()
+                            expiryMonth = m.toString().padStart(2, '0')
+                            showDatePicker = false
+                        }
+                    )
+                }
+
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        OutlinedTextField(
-                            value = expiryMonth,
-                            onValueChange = { expiryMonth = it },
-                            label = { Text("ماه انقضا") },
-                            placeholder = { Text("08") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        OutlinedTextField(
-                            value = expiryYear,
-                            onValueChange = { expiryYear = it },
-                            label = { Text("سال انقضا") },
-                            placeholder = { Text("\u206806\u2069 یا \u20681406\u2069") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f)
-                        )
+                        Box(modifier = Modifier.weight(2f)) {
+                            OutlinedTextField(
+                                value = expiryDisplayText,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("تاریخ انقضا (ماه/سال)") },
+                                placeholder = { Text("1408/04") },
+                                singleLine = true,
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = { showDatePicker = true },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.DateRange,
+                                            contentDescription = "انتخاب تاریخ"
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { showDatePicker = true }
+                            )
+                        }
 
                         OutlinedTextField(
                             value = cvv2,
@@ -338,6 +385,38 @@ fun AddEditCardDialog(
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             modifier = Modifier.weight(1f)
                         )
+                    }
+                }
+
+                // Expiry Alert Threshold Dropdown
+                ExposedDropdownMenuBox(
+                    expanded = isReminderDropdownExpanded,
+                    onExpandedChange = { isReminderDropdownExpanded = !isReminderDropdownExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = "$reminderMonths ماه قبل",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("هشدار انقضا") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isReminderDropdownExpanded) },
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = isReminderDropdownExpanded,
+                        onDismissRequest = { isReminderDropdownExpanded = false }
+                    ) {
+                        listOf(1, 2, 3, 6, 12).forEach { monthCount ->
+                            DropdownMenuItem(
+                                text = { Text("$monthCount ماه قبل") },
+                                onClick = {
+                                    reminderMonths = monthCount
+                                    isReminderDropdownExpanded = false
+                                }
+                            )
+                        }
                     }
                 }
 
@@ -423,7 +502,8 @@ fun AddEditCardDialog(
                                 colorEndHex = detectedBank.colorEndHex,
                                 accountNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(accountNumber),
                                 notes = notes,
-                                customFieldsJson = encodedCustom
+                                customFieldsJson = encodedCustom,
+                                reminderMonthsBefore = reminderMonths
                             )).copy(
                                 cardNumber = cleanCardNumber,
                                 bankName = finalBankName,
@@ -437,7 +517,8 @@ fun AddEditCardDialog(
                                 colorEndHex = detectedBank.colorEndHex,
                                 accountNumber = TextPreprocessor.convertPersianArabicDigitsToEnglish(accountNumber),
                                 notes = notes,
-                                customFieldsJson = encodedCustom
+                                customFieldsJson = encodedCustom,
+                                reminderMonthsBefore = reminderMonths
                             )
 
                             onSave(cardToSave)

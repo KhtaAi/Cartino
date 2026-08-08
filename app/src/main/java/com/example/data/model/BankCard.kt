@@ -28,6 +28,7 @@ data class BankCard(
     val notes: String = "",
     val customFieldsJson: String = "",
     val isFavorite: Boolean = false,
+    val reminderMonthsBefore: Int = 2,
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun encrypted(): BankCard = copy(

@@ -38,6 +38,7 @@ data class IdentityDocument(
     val notes: String = "",
     val customFieldsJson: String = "[]",
     val fieldPlacementsJson: String = "{}",
+    val reminderMonthsBefore: Int = 2,
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun encrypted(): IdentityDocument = copy(
