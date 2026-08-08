@@ -49,8 +49,8 @@ android {
     namespace = "com.example"
     compileSdk = 36
 
-    val autoVersionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: System.getenv("VERSION_CODE")?.toIntOrNull() ?: project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 24
-    val autoVersionName = (findProperty("versionName") as String?) ?: System.getenv("VERSION_NAME") ?: project.findProperty("VERSION_NAME")?.toString() ?: "1.0.24"
+    val autoVersionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: System.getenv("VERSION_CODE")?.toIntOrNull() ?: project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 25
+    val autoVersionName = (findProperty("versionName") as String?) ?: System.getenv("VERSION_NAME") ?: project.findProperty("VERSION_NAME")?.toString() ?: "1.0.25"
 
     defaultConfig {
         applicationId = "com.aistudio.cartino.app"

@@ -76,6 +76,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import com.example.ui.theme.VazirmatnFontFamily
+import com.example.util.ClipboardAutoClearManager
 import com.example.util.SyncLogger
 import com.example.util.WebDavConfig
 
@@ -503,6 +504,7 @@ fun SyncBackupScreen(
                                         Toast.makeText(context, "هنوز لاگی ثبت نشده است", Toast.LENGTH_SHORT).show()
                                     } else {
                                         clipboardManager.setText(AnnotatedString(allLogsText))
+                                        ClipboardAutoClearManager.onCopied(context, allLogsText)
                                         Toast.makeText(context, "تمام لاگ‌ها در حافظه کپی شدند", Toast.LENGTH_LONG).show()
                                     }
                                 },
@@ -543,6 +545,7 @@ fun SyncBackupScreen(
                                 Toast.makeText(context, "هنوز لاگی ثبت نشده است", Toast.LENGTH_SHORT).show()
                             } else {
                                 clipboardManager.setText(AnnotatedString(allLogsText))
+                                ClipboardAutoClearManager.onCopied(context, allLogsText)
                                 Toast.makeText(context, "تمام لاگ‌ها در حافظه کپی شدند", Toast.LENGTH_LONG).show()
                             }
                         },
@@ -638,6 +641,7 @@ fun SyncBackupScreen(
                         val allLogsText = SyncLogger.getAllLogsText()
                         if (allLogsText.isNotBlank()) {
                             clipboardManager.setText(AnnotatedString(allLogsText))
+                            ClipboardAutoClearManager.onCopied(context, allLogsText)
                             Toast.makeText(context, "تمام لاگ‌ها در حافظه کپی شدند", Toast.LENGTH_LONG).show()
                         }
                     }

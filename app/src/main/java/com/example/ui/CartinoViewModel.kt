@@ -214,6 +214,16 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     private val _appAccentPalette = MutableStateFlow(plainPrefs.getString("app_accent_palette", "GREEN") ?: "GREEN")
     val appAccentPalette: StateFlow<String> = _appAccentPalette.asStateFlow()
 
+    private val _clipboardAutoClearEnabled = MutableStateFlow(
+        plainPrefs.getBoolean("clipboard_auto_clear_enabled", true)
+    )
+    val clipboardAutoClearEnabled: StateFlow<Boolean> = _clipboardAutoClearEnabled.asStateFlow()
+
+    private val _clipboardAutoClearSeconds = MutableStateFlow(
+        plainPrefs.getInt("clipboard_auto_clear_seconds", 30)
+    )
+    val clipboardAutoClearSeconds: StateFlow<Int> = _clipboardAutoClearSeconds.asStateFlow()
+
     fun setAppThemeMode(mode: String) {
         _appThemeMode.value = mode
         plainPrefs.edit().putString("app_theme_mode", mode).apply()
@@ -222,6 +232,17 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     fun setAppAccentPalette(palette: String) {
         _appAccentPalette.value = palette
         plainPrefs.edit().putString("app_accent_palette", palette).apply()
+    }
+
+    fun setClipboardAutoClearEnabled(enabled: Boolean) {
+        _clipboardAutoClearEnabled.value = enabled
+        plainPrefs.edit().putBoolean("clipboard_auto_clear_enabled", enabled).apply()
+    }
+
+    fun setClipboardAutoClearSeconds(seconds: Int) {
+        val validSeconds = seconds.coerceIn(1, 3600)
+        _clipboardAutoClearSeconds.value = validSeconds
+        plainPrefs.edit().putInt("clipboard_auto_clear_seconds", validSeconds).apply()
     }
 
     fun updateSearchQuery(query: String) {

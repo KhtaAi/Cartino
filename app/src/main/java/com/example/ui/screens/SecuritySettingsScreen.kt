@@ -11,15 +11,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Info
@@ -104,6 +108,8 @@ fun SecuritySettingsScreen(
     val context = LocalContext.current
     val isBiometricEnabled by viewModel.isBiometricEnabled.collectAsState()
     val isFlagSecureEnabled by viewModel.isFlagSecureEnabled.collectAsState()
+    val isClipboardAutoClearEnabled by viewModel.clipboardAutoClearEnabled.collectAsState()
+    val clipboardAutoClearSeconds by viewModel.clipboardAutoClearSeconds.collectAsState()
 
     val isBiometricHardwareAvailable = remember(context) { SecurityManager.isBiometricAvailable(context) }
 
@@ -413,6 +419,126 @@ fun SecuritySettingsScreen(
                                 SecurityManager.setScreenProtection(activity, it)
                             }
                         }
+                    )
+                }
+            }
+        }
+
+        // Auto-Clear Clipboard Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("پاکسازی خودکار کلیپ‌بورد", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = "حذف خودکار داده‌های کپی‌شده از حافظه موقت پس از زمان مشخص",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Switch(
+                        checked = isClipboardAutoClearEnabled,
+                        onCheckedChange = { viewModel.setClipboardAutoClearEnabled(it) }
+                    )
+                }
+
+                if (isClipboardAutoClearEnabled) {
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = "پیش‌تنظیم‌های زمان پاکسازی:",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val presets = listOf(10, 30, 60, 120)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        presets.forEach { sec ->
+                            val isSelected = (clipboardAutoClearSeconds == sec)
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { viewModel.setClipboardAutoClearSeconds(sec) },
+                                label = {
+                                    Text(
+                                        text = "$sec ثانیه",
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "مقدار سفارشی (۱ تا ۳۶۰۰ ثانیه):",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    var customInputText by remember(clipboardAutoClearSeconds) {
+                        mutableStateOf(clipboardAutoClearSeconds.toString())
+                    }
+
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                        OutlinedTextField(
+                            value = customInputText,
+                            onValueChange = { newValue ->
+                                val digitsOnly = newValue.filter { it.isDigit() }
+                                if (digitsOnly.length <= 4) {
+                                    customInputText = digitsOnly
+                                    val parsed = digitsOnly.toIntOrNull()
+                                    if (parsed != null && parsed in 1..3600) {
+                                        viewModel.setClipboardAutoClearSeconds(parsed)
+                                    }
+                                }
+                            },
+                            label = { Text("زمان (ثانیه)") },
+                            placeholder = { Text("مثلاً 30") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "زمان فعلی: $clipboardAutoClearSeconds ثانیه",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }

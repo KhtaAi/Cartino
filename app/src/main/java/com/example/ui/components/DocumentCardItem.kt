@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import com.example.util.ClipboardAutoClearManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -87,7 +88,18 @@ fun DocumentCardItem(
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText(label, textToCopy)
         clipboard.setPrimaryClip(clip)
-        Toast.makeText(context, "$label کپی شد", Toast.LENGTH_SHORT).show()
+        ClipboardAutoClearManager.onCopied(context, textToCopy)
+
+        val prefs = context.applicationContext.getSharedPreferences("cartino_prefs", Context.MODE_PRIVATE)
+        val enabled = prefs.getBoolean("clipboard_auto_clear_enabled", true)
+        val seconds = prefs.getInt("clipboard_auto_clear_seconds", 30)
+
+        val finalToast = if (enabled) {
+            "کپی شد — پاکسازی خودکار پس از $seconds ثانیه"
+        } else {
+            "کپی شد"
+        }
+        Toast.makeText(context, finalToast, Toast.LENGTH_SHORT).show()
     }
 
     if (showDeleteConfirmDialog) {
