@@ -13,6 +13,7 @@ import com.example.util.BackupSyncManager
 import com.example.util.IranianBankHelper
 import com.example.util.ParsedCardData
 import com.example.util.SyncLogger
+import com.example.util.TotpManager
 import com.example.util.WebDavConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -181,6 +182,38 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     private val _isFlagSecureEnabled = MutableStateFlow(true)
     val isFlagSecureEnabled: StateFlow<Boolean> = _isFlagSecureEnabled.asStateFlow()
+
+    private val _isTotpEnabled = MutableStateFlow(
+        safeGetEncryptedString("totp_enabled", "false") == "true"
+    )
+    val isTotpEnabled: StateFlow<Boolean> = _isTotpEnabled.asStateFlow()
+
+    private val _totpSecret = MutableStateFlow(
+        safeGetEncryptedString("totp_secret", "")
+    )
+    val totpSecret: StateFlow<String> = _totpSecret.asStateFlow()
+
+    fun enableTotp(secret: String) {
+        safePutEncryptedString("totp_secret", secret)
+        safePutEncryptedString("totp_enabled", "true")
+        _totpSecret.value = secret
+        _isTotpEnabled.value = true
+        SyncLogger.log("TOTP", "احراز هویت دو مرحله‌ای (TOTP) فعال شد")
+    }
+
+    fun disableTotp() {
+        safePutEncryptedString("totp_secret", "")
+        safePutEncryptedString("totp_enabled", "false")
+        _totpSecret.value = ""
+        _isTotpEnabled.value = false
+        SyncLogger.log("TOTP", "احراز هویت دو مرحله‌ای (TOTP) غیرفعال شد")
+    }
+
+    fun verifyTotpCode(code: String): Boolean {
+        val secret = _totpSecret.value
+        if (secret.isBlank()) return false
+        return TotpManager.verifyTotp(secret, code)
+    }
 
     private val _webDavConfig = MutableStateFlow(
         WebDavConfig(

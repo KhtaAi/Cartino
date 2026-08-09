@@ -29,5 +29,25 @@ class ExampleUnitTest {
     val melliBankCard2 = IranianBankHelper.getBankByCardNumber("1700190000000000")
     assertEquals("بانک ملی ایران", melliBankCard2.name)
   }
+
+  @Test
+  fun totpManager_secretAndVerifyWorkCorrectly() {
+    val secret = com.example.util.TotpManager.generateSecret()
+    assertTrue(secret.isNotBlank())
+    assertEquals(32, secret.length)
+
+    val currentTotp = com.example.util.TotpManager.generateTotp(secret)
+    assertEquals(6, currentTotp.length)
+
+    val isValid = com.example.util.TotpManager.verifyTotp(secret, currentTotp)
+    assertTrue(isValid)
+
+    val isInvalid = com.example.util.TotpManager.verifyTotp(secret, "000000")
+    assertFalse(isInvalid)
+
+    val qrUri = com.example.util.TotpManager.getQrCodeUri(secret)
+    assertTrue(qrUri.contains(secret))
+    assertTrue(qrUri.startsWith("otpauth://totp/Cartino:Backup"))
+  }
 }
 

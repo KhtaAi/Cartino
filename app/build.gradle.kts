@@ -155,6 +155,7 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.mlkit.text.recognition)
     implementation(libs.androidx.security.crypto)
+    implementation(libs.zxing.core)
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation(libs.firebase.appcheck.recaptcha)
     implementation(libs.kotlinx.coroutines.android)

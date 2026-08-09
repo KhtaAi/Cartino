@@ -544,6 +544,116 @@ fun SecuritySettingsScreen(
             }
         }
 
+        val isTotpEnabled by viewModel.isTotpEnabled.collectAsState()
+        var showTotpSetupDialog by remember { mutableStateOf(false) }
+        var showTotpDisableConfirmDialog by remember { mutableStateOf(false) }
+
+        // TOTP Security Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("احراز هویت دو مرحله‌ای (TOTP)", fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (isTotpEnabled) "فعال - آماده استفاده در بازیابی" else "غیرفعال",
+                                fontSize = 11.sp,
+                                color = if (isTotpEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Switch(
+                        checked = isTotpEnabled,
+                        onCheckedChange = { checked ->
+                            if (checked) {
+                                showTotpSetupDialog = true
+                            } else {
+                                showTotpDisableConfirmDialog = true
+                            }
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "TOTP فقط هنگام بازیابی فایل پشتیبانی لازم است. پشتیبان‌گیری و همگام‌سازی نیازی به آن ندارند.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+
+                if (isTotpEnabled) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = { showTotpDisableConfirmDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("غیرفعال‌سازی TOTP")
+                    }
+                }
+            }
+        }
+
+        if (showTotpSetupDialog) {
+            com.example.ui.components.TotpSetupDialog(
+                onConfirmEnable = { secret ->
+                    viewModel.enableTotp(secret)
+                    showTotpSetupDialog = false
+                    Toast.makeText(context, "احراز هویت دو مرحله‌ای (TOTP) با موفقیت فعال شد", Toast.LENGTH_LONG).show()
+                },
+                onDismiss = { showTotpSetupDialog = false }
+            )
+        }
+
+        if (showTotpDisableConfirmDialog) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showTotpDisableConfirmDialog = false },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            viewModel.disableTotp()
+                            showTotpDisableConfirmDialog = false
+                            Toast.makeText(context, "احراز هویت دو مرحله‌ای غیرفعال شد", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("غیرفعال‌سازی")
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { showTotpDisableConfirmDialog = false }) {
+                        Text("انصراف")
+                    }
+                },
+                title = { Text("غیرفعال‌سازی TOTP", fontWeight = FontWeight.Bold) },
+                text = { Text("آیا از غیرفعال‌سازی احراز هویت دو مرحله‌ای اطمینان دارید؟ پس از غیرفعال‌سازی، بازیابی فایل‌های پشتیبان نیازی به کد یکبارمصرف نخواهد داشت.") }
+            )
+        }
+
         val masterPassword by viewModel.masterEncryptionPassword.collectAsState()
         var passwordInput by remember(masterPassword) { mutableStateOf(masterPassword) }
         var isPasswordVisible by remember { mutableStateOf(false) }
