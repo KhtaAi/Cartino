@@ -120,11 +120,13 @@ fun SecuritySettingsScreen(
     val isClipboardAutoClearEnabled by viewModel.clipboardAutoClearEnabled.collectAsState()
     val clipboardAutoClearSeconds by viewModel.clipboardAutoClearSeconds.collectAsState()
     val isTotpEnabled by viewModel.isTotpEnabled.collectAsState()
+    val isPasskeyEnabled by viewModel.isPasskeyEnabled.collectAsState()
     val appThemeMode by viewModel.appThemeMode.collectAsState()
     val appAccentPalette by viewModel.appAccentPalette.collectAsState()
     val masterPassword by viewModel.masterEncryptionPassword.collectAsState()
 
     val isBiometricHardwareAvailable = remember(context) { SecurityManager.isBiometricAvailable(context) }
+    val isPasskeyHardwareAvailable = remember(context) { com.example.util.PasskeyManager.isPasskeyAvailable(context) }
 
     val versionName = remember(context) {
         try {
@@ -141,6 +143,8 @@ fun SecuritySettingsScreen(
 
     var showTotpSetupDialog by remember { mutableStateOf(false) }
     var showTotpDisableConfirmDialog by remember { mutableStateOf(false) }
+    var showPasskeySetupDialog by remember { mutableStateOf(false) }
+    var showPasskeyDisableConfirmDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -449,6 +453,72 @@ fun SecuritySettingsScreen(
                         Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("غیرفعال‌سازی TOTP")
+                    }
+                }
+            }
+
+            // Item 3: Passkey 2FA
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Fingerprint,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("احراز هویت دو مرحله‌ای (Passkey)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                text = if (isPasskeyHardwareAvailable) {
+                                    if (isPasskeyEnabled) "فعال - احراز هویت با اثر انگشت/چهره" else "غیرفعال - کلید FIDO2"
+                                } else "سنسور احراز هویت روی دستگاه یافت نشد",
+                                fontSize = 11.sp,
+                                color = if (isPasskeyEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Switch(
+                        checked = isPasskeyEnabled,
+                        onCheckedChange = { checked ->
+                            if (checked) {
+                                showPasskeySetupDialog = true
+                            } else {
+                                showPasskeyDisableConfirmDialog = true
+                            }
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = "Passkey به عنوان روش احراز هویت دو مرحله‌ای امن جایگزین یا مکمل TOTP عمل می‌کند.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+
+                if (isPasskeyEnabled) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { showPasskeyDisableConfirmDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("غیرفعال‌سازی Passkey")
                     }
                 }
             }
@@ -899,6 +969,42 @@ fun SecuritySettingsScreen(
             },
             title = { Text("غیرفعال‌سازی TOTP", fontWeight = FontWeight.Bold) },
             text = { Text("آیا از غیرفعال‌سازی احراز هویت دو مرحله‌ای اطمینان دارید؟ پس از غیرفعال‌سازی، بازیابی فایل‌های پشتیبان نیازی به کد یکبارمصرف نخواهد داشت.") }
+        )
+    }
+
+    if (showPasskeySetupDialog) {
+        com.example.ui.components.PasskeySetupDialog(
+            onConfirmEnable = {
+                viewModel.enablePasskey()
+                showPasskeySetupDialog = false
+                Toast.makeText(context, "احراز هویت دو مرحله‌ای (Passkey) با موفقیت فعال شد", Toast.LENGTH_LONG).show()
+            },
+            onDismiss = { showPasskeySetupDialog = false }
+        )
+    }
+
+    if (showPasskeyDisableConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showPasskeyDisableConfirmDialog = false },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.disablePasskey()
+                        showPasskeyDisableConfirmDialog = false
+                        Toast.makeText(context, "احراز هویت دو مرحله‌ای (Passkey) غیرفعال شد", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("غیرفعال‌سازی")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPasskeyDisableConfirmDialog = false }) {
+                    Text("انصراف")
+                }
+            },
+            title = { Text("غیرفعال‌سازی Passkey", fontWeight = FontWeight.Bold) },
+            text = { Text("آیا از غیرفعال‌سازی احراز هویت دو مرحله‌ای Passkey اطمینان دارید؟") }
         )
     }
 }

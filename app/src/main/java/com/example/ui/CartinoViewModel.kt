@@ -209,6 +209,28 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         SyncLogger.log("TOTP", "احراز هویت دو مرحله‌ای (TOTP) غیرفعال شد")
     }
 
+    private val _isPasskeyEnabled = MutableStateFlow(
+        safeGetEncryptedString("passkey_enabled", "false") == "true"
+    )
+    val isPasskeyEnabled: StateFlow<Boolean> = _isPasskeyEnabled.asStateFlow()
+
+    fun enablePasskey() {
+        safePutEncryptedString("passkey_enabled", "true")
+        _isPasskeyEnabled.value = true
+        SyncLogger.log("PASSKEY", "احراز هویت دو مرحله‌ای (Passkey) فعال شد")
+    }
+
+    fun disablePasskey() {
+        com.example.util.PasskeyManager.disablePasskey(getApplication())
+        safePutEncryptedString("passkey_enabled", "false")
+        _isPasskeyEnabled.value = false
+        SyncLogger.log("PASSKEY", "احراز هویت دو مرحله‌ای (Passkey) غیرفعال شد")
+    }
+
+    fun verifyPasskeySignature(challenge: ByteArray, signature: ByteArray): Boolean {
+        return com.example.util.PasskeyManager.verifyPasskeySignature(getApplication(), challenge, signature)
+    }
+
     fun verifyTotpCode(code: String): Boolean {
         val secret = _totpSecret.value
         if (secret.isBlank()) return false
