@@ -45,9 +45,11 @@ biometric = "1.2.0-alpha05"
 mlkitTextRecognition = "19.0.1"
 securityCrypto = "1.1.0-alpha06"
 zxingCore = "3.5.3"
+bouncycastle = "1.78.1"
 
 
 [libraries]
+bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

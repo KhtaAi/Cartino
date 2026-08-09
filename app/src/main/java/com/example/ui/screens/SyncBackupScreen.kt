@@ -650,11 +650,11 @@ fun SyncBackupScreen(
                 showTotpVerifyDialog = false
                 when (pendingRestoreTarget) {
                     BackupTarget.WEBDAV -> {
-                        viewModel.restoreFromWebDav(pendingRestorePassword)
+                        viewModel.restoreFromWebDav(pendingRestorePassword, totpCode = "VERIFIED")
                     }
                     BackupTarget.LOCAL_FILE -> {
                         pendingRestoreUri?.let { uri ->
-                            viewModel.restoreLocalBackupFromUri(uri, pendingRestorePassword)
+                            viewModel.restoreLocalBackupFromUri(uri, pendingRestorePassword, totpCode = "VERIFIED")
                         }
                     }
                 }

@@ -10,11 +10,11 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import java.security.SecureRandom
 import javax.crypto.Cipher
-import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 import android.util.Base64
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator
+import org.bouncycastle.crypto.params.Argon2Parameters
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -169,16 +169,46 @@ object SecurityManager {
         biometricPrompt.authenticate(promptInfo)
     }
 
+    private fun deriveArgon2idKey(password: CharArray, salt: ByteArray): ByteArray {
+        val passwordBytes = String(password).toByteArray(Charsets.UTF_8)
+        val builder = Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+            .withVersion(Argon2Parameters.ARGON2_VERSION_13)
+            .withIterations(3)
+            .withMemoryAsKB(65536)
+            .withParallelism(4)
+            .withSalt(salt)
+        val generator = Argon2BytesGenerator()
+        generator.init(builder.build())
+        val key = ByteArray(32)
+        generator.generateBytes(passwordBytes, key, 0, key.size)
+        return key
+    }
+
+    private fun encodeBase64(bytes: ByteArray): String {
+        return try {
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (e: Throwable) {
+            java.util.Base64.getEncoder().encodeToString(bytes)
+        }
+    }
+
+    private fun decodeBase64(str: String): ByteArray {
+        return try {
+            Base64.decode(str, Base64.NO_WRAP)
+        } catch (e: Throwable) {
+            java.util.Base64.getDecoder().decode(str)
+        }
+    }
+
     /**
-     * AES-256 GCM Encryption using a master key derived via PBKDF2 with GZIP payload compression.
+     * AES-256 GCM Encryption using a key derived via Argon2id with GZIP payload compression.
      */
     fun encryptData(plainText: String, password: CharArray): String {
         val salt = ByteArray(16)
         SecureRandom().nextBytes(salt)
 
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val spec = PBEKeySpec(password, salt, 65536, 256)
-        val secretKey = SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
+        val keyBytes = deriveArgon2idKey(password, salt)
+        val secretKey = SecretKeySpec(keyBytes, "AES")
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, secretKey)
@@ -200,24 +230,23 @@ object SecurityManager {
         System.arraycopy(iv, 0, combined, salt.size, iv.size)
         System.arraycopy(encryptedBytes, 0, combined, salt.size + iv.size, encryptedBytes.size)
 
-        return Base64.encodeToString(combined, Base64.NO_WRAP)
+        return encodeBase64(combined)
     }
 
     /**
-     * AES-256 GCM Decryption with automatic GZIP decompression support.
+     * AES-256 GCM Decryption with Argon2id key derivation and GZIP decompression support.
      */
     fun decryptData(encryptedBase64: String, password: CharArray): String {
         val cleanInput = encryptedBase64.trim().replace("\n", "").replace("\r", "")
-        val combined = Base64.decode(cleanInput, Base64.NO_WRAP)
+        val combined = decodeBase64(cleanInput)
         if (combined.size < 28) throw IllegalArgumentException("فرمت فایل رمزنگاری شده معتبر نیست")
 
         val salt = combined.copyOfRange(0, 16)
         val iv = combined.copyOfRange(16, 28)
         val ciphertext = combined.copyOfRange(28, combined.size)
 
-        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-        val spec = PBEKeySpec(password, salt, 65536, 256)
-        val secretKey = SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
+        val keyBytes = deriveArgon2idKey(password, salt)
+        val secretKey = SecretKeySpec(keyBytes, "AES")
 
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val gcmSpec = GCMParameterSpec(128, iv)
@@ -225,7 +254,6 @@ object SecurityManager {
 
         val decryptedBytes = cipher.doFinal(ciphertext)
 
-        // Try decompressing GZIP if present, otherwise fallback to UTF-8 string for legacy uncompressed backups
         return try {
             if (decryptedBytes.size >= 2 && decryptedBytes[0] == 0x1f.toByte() && decryptedBytes[1] == 0x8b.toByte()) {
                 val gzStream = java.util.zip.GZIPInputStream(java.io.ByteArrayInputStream(decryptedBytes))

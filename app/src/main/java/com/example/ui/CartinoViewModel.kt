@@ -365,7 +365,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun restoreLocalBackupFromUri(uri: Uri, password: String) {
+    fun restoreLocalBackupFromUri(uri: Uri, password: String, totpCode: String? = null) {
         viewModelScope.launch {
             _syncState.value = SyncUiState.Loading
             val effectivePassword = password.ifBlank { _masterEncryptionPassword.value }
@@ -374,7 +374,18 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 return@launch
             }
             runCatching {
-                BackupSyncManager.restoreFromEncryptedUri(getApplication(), uri, effectivePassword)
+                BackupSyncManager.restoreFromEncryptedUri(
+                    context = getApplication(),
+                    uri = uri,
+                    password = effectivePassword,
+                    totpVerifier = {
+                        if (!totpCode.isNullOrBlank()) {
+                            if (totpCode == "VERIFIED") true else verifyTotpCode(totpCode)
+                        } else {
+                            false
+                        }
+                    }
+                )
             }.onSuccess { (cardsCount, docsCount) ->
                 _syncState.value = SyncUiState.Success("بازیابی اطلاعات با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
             }.onFailure { err ->
@@ -407,7 +418,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun restoreFromWebDav(password: String) {
+    fun restoreFromWebDav(password: String, totpCode: String? = null) {
         viewModelScope.launch {
             _syncState.value = SyncUiState.Loading
             val config = _webDavConfig.value
@@ -422,7 +433,18 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
             }
             runCatching {
                 val payload = BackupSyncManager.downloadFromWebDav(config)
-                BackupSyncManager.restoreFromEncryptedPayload(getApplication(), payload, effectivePassword)
+                BackupSyncManager.restoreFromEncryptedPayload(
+                    context = getApplication(),
+                    encryptedBase64 = payload,
+                    password = effectivePassword,
+                    totpVerifier = {
+                        if (!totpCode.isNullOrBlank()) {
+                            if (totpCode == "VERIFIED") true else verifyTotpCode(totpCode)
+                        } else {
+                            false
+                        }
+                    }
+                )
             }.onSuccess { (cardsCount, docsCount) ->
                 _syncState.value = SyncUiState.Success("بازیابی از سرور WebDAV با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
             }.onFailure { err ->

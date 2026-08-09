@@ -49,5 +49,17 @@ class ExampleUnitTest {
     assertTrue(qrUri.contains(secret))
     assertTrue(qrUri.startsWith("otpauth://totp/Cartino:Backup"))
   }
+
+  @Test
+  fun securityManager_argon2idEncryptionAndDecryptionWork() {
+    val sampleText = "تست اطلاعات محرمانه بک‌آپ کارتینو 123456"
+    val password = "StrongPassword123!".toCharArray()
+
+    val encryptedBase64 = com.example.util.SecurityManager.encryptData(sampleText, password)
+    assertTrue(encryptedBase64.isNotBlank())
+
+    val decryptedText = com.example.util.SecurityManager.decryptData(encryptedBase64, password)
+    assertEquals(sampleText, decryptedText)
+  }
 }
 

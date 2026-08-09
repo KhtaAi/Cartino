@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit
 data class BackupPayload(
     val version: Int = 1,
     val timestamp: Long = System.currentTimeMillis(),
+    val totpRequired: Boolean = false,
     val cards: List<BankCard> = emptyList(),
     val documents: List<IdentityDocument> = emptyList()
 )
@@ -49,6 +50,24 @@ object BackupSyncManager {
         .followSslRedirects(true)
         .build()
 
+    private fun isTotpEnabledInPrefs(context: Context): Boolean {
+        return try {
+            val masterKey = androidx.security.crypto.MasterKey.Builder(context)
+                .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            val prefs = androidx.security.crypto.EncryptedSharedPreferences.create(
+                context,
+                "cartino_encrypted_prefs",
+                masterKey,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            prefs.getString("totp_enabled", "false") == "true"
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
     /**
      * Generates an encrypted backup payload string from Room DB using user password.
      */
@@ -58,9 +77,11 @@ object BackupSyncManager {
         val cards = db.bankCardDao().getAllCards().first().map { it.decrypted() }
         val docs = db.identityDocumentDao().getAllDocuments().first().map { it.decrypted() }
 
-        SyncLogger.log("BACKUP", "تعداد کارت‌ها: ${cards.size} | تعداد مدارک: ${docs.size}")
+        val totpActive = isTotpEnabledInPrefs(context)
+        SyncLogger.log("BACKUP", "تعداد کارت‌ها: ${cards.size} | تعداد مدارک: ${docs.size} | TOTP: ${if (totpActive) "فعال" else "غیرفعال"}")
 
         val payload = BackupPayload(
+            totpRequired = totpActive,
             cards = cards,
             documents = docs
         )
@@ -69,14 +90,19 @@ object BackupSyncManager {
         val jsonString = adapter.toJson(payload)
 
         val encrypted = SecurityManager.encryptData(jsonString, password.toCharArray())
-        SyncLogger.log("BACKUP", "بسته AES-256 آماده شد. حجم فایل رمز شده: ${encrypted.length} کاراکتر")
+        SyncLogger.log("BACKUP", "بسته AES-256 (Argon2id) آماده شد. حجم فایل رمز شده: ${encrypted.length} کاراکتر")
         encrypted
     }
 
     /**
      * Restores records into Room DB from an encrypted backup payload.
      */
-    suspend fun restoreFromEncryptedPayload(context: Context, encryptedBase64: String, password: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+    suspend fun restoreFromEncryptedPayload(
+        context: Context,
+        encryptedBase64: String,
+        password: String,
+        totpVerifier: (suspend () -> Boolean)? = null
+    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
         SyncLogger.log("RESTORE", "شروع رمزگشایی بسته داده‌ها...")
         val decryptedJson = try {
             SecurityManager.decryptData(encryptedBase64, password.toCharArray())
@@ -89,6 +115,15 @@ object BackupSyncManager {
         val payload = adapter.fromJson(decryptedJson) ?: run {
             SyncLogger.log("RESTORE", "خطا: ساختار JSON بسته بازیابی معتبر نیست")
             throw IllegalArgumentException("فرمت محتوای بک‌آپ خوانا نیست")
+        }
+
+        if (payload.totpRequired) {
+            SyncLogger.log("RESTORE", "این فایل پشتیبان به احراز هویت دو مرحله‌ای (TOTP) نیاز دارد")
+            if (totpVerifier == null || !totpVerifier()) {
+                SyncLogger.log("RESTORE", "خطا: تایید کد TOTP انجام نشد یا ناموفق بود")
+                throw IllegalArgumentException("برای بازیابی این فایل پشتیبان، تایید کد TOTP الزامی است.")
+            }
+            SyncLogger.log("RESTORE", "احراز هویت دو مرحله‌ای TOTP با موفقیت تایید گردید")
         }
 
         val db = CartinoDatabase.getDatabase(context)
@@ -128,14 +163,19 @@ object BackupSyncManager {
     /**
      * Restores encrypted backup file directly from a user-chosen SAF Uri.
      */
-    suspend fun restoreFromEncryptedUri(context: Context, uri: Uri, password: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+    suspend fun restoreFromEncryptedUri(
+        context: Context,
+        uri: Uri,
+        password: String,
+        totpVerifier: (suspend () -> Boolean)? = null
+    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
         SyncLogger.log("LOCAL_FILE", "خواندن فایل بک‌آپ محلی از URI: $uri")
         val payloadText = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
             ?: run {
                 SyncLogger.log("LOCAL_FILE", "خطا: عدم امکان خواندن فایل از URI")
                 throw IllegalStateException("امکان خواندن فایل انتخاب‌شده وجود ندارد")
             }
-        restoreFromEncryptedPayload(context, payloadText, password)
+        restoreFromEncryptedPayload(context, payloadText, password, totpVerifier)
     }
 
     /**
