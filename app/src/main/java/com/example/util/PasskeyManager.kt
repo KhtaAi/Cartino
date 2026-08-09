@@ -101,9 +101,8 @@ object PasskeyManager {
                     })
                     put("timeout", 60000)
                     put("authenticatorSelection", JSONObject().apply {
-                        put("authenticatorAttachment", "platform")
-                        put("requireResidentKey", false)
-                        put("residentKey", "preferred")
+                        put("requireResidentKey", true)
+                        put("residentKey", "required")
                         put("userVerification", "preferred")
                     })
                     put("attestation", "none")
