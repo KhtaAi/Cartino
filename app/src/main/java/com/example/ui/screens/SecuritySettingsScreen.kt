@@ -3,9 +3,17 @@ package com.example.ui.screens
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,42 +23,51 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.SettingsBrightness
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -61,22 +78,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.LightMode
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.SettingsBrightness
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.LayoutDirection
@@ -110,6 +119,10 @@ fun SecuritySettingsScreen(
     val isFlagSecureEnabled by viewModel.isFlagSecureEnabled.collectAsState()
     val isClipboardAutoClearEnabled by viewModel.clipboardAutoClearEnabled.collectAsState()
     val clipboardAutoClearSeconds by viewModel.clipboardAutoClearSeconds.collectAsState()
+    val isTotpEnabled by viewModel.isTotpEnabled.collectAsState()
+    val appThemeMode by viewModel.appThemeMode.collectAsState()
+    val appAccentPalette by viewModel.appAccentPalette.collectAsState()
+    val masterPassword by viewModel.masterEncryptionPassword.collectAsState()
 
     val isBiometricHardwareAvailable = remember(context) { SecurityManager.isBiometricAvailable(context) }
 
@@ -122,41 +135,36 @@ fun SecuritySettingsScreen(
         }
     }
 
+    var isGroup1Expanded by remember { mutableStateOf(false) }
+    var isGroup2Expanded by remember { mutableStateOf(false) }
+    var isGroup3Expanded by remember { mutableStateOf(false) }
+
+    var showTotpSetupDialog by remember { mutableStateOf(false) }
+    var showTotpDisableConfirmDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = "تنظیمات برنامه و امنیت",
+            text = "تنظیمات و امنیت",
             style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 4.dp)
         )
 
-        val appThemeMode by viewModel.appThemeMode.collectAsState()
-        val appAccentPalette by viewModel.appAccentPalette.collectAsState()
-
-        // Appearance & Theme Settings Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        // ==================== GROUP 1: ظاهر و تم ====================
+        CollapsibleSectionCard(
+            title = "ظاهر و تم",
+            icon = Icons.Default.Palette,
+            isExpanded = isGroup1Expanded,
+            onToggle = { isGroup1Expanded = !isGroup1Expanded }
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Palette, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text("ظاهر و پوسته برنامه", fontWeight = FontWeight.Bold)
-                        Text("تعیین حالت دارک/لایت و پالت رنگی اصلی UI", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Item 1: Theme Mode Selection (Custom Modern Dropdown Menu)
+            // Item 1: Theme Mode Selection
+            Column {
                 Text("۱- حالت پوسته (تیره / روشن / سیستم)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -259,10 +267,10 @@ fun SecuritySettingsScreen(
                         }
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Item 2: UI Color Palette Selection
+            // Item 2: UI Color Palette Selection
+            Column {
                 Text("۲- پالت رنگی کامل UI برنامه", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(10.dp))
 
@@ -317,13 +325,15 @@ fun SecuritySettingsScreen(
             }
         }
 
-        // Biometric Lock Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        // ==================== GROUP 2: امنیت و احراز هویت ====================
+        CollapsibleSectionCard(
+            title = "امنیت و احراز هویت",
+            icon = Icons.Default.Security,
+            isExpanded = isGroup2Expanded,
+            onToggle = { isGroup2Expanded = !isGroup2Expanded }
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            // Item 1: Biometric Lock
+            Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -336,7 +346,7 @@ fun SecuritySettingsScreen(
                         Icon(Icons.Default.Fingerprint, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("قفل بیومتریک (اثر انگشت/چهره)", fontWeight = FontWeight.Bold)
+                            Text("قفل بیومتریک (اثر انگشت/چهره)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(
                                 text = if (isBiometricHardwareAvailable) "سنسور بیومتریک دستگاه فعال است" else "سنسور بیومتریک روی دستگاه یافت نشد",
                                 fontSize = 11.sp,
@@ -354,7 +364,7 @@ fun SecuritySettingsScreen(
                 }
 
                 if (isBiometricEnabled) {
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     OutlinedButton(
                         onClick = {
                             val activity = context.findActivity()
@@ -378,15 +388,150 @@ fun SecuritySettingsScreen(
                     }
                 }
             }
-        }
 
-        // FLAG_SECURE Screenshot Prevention Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            // Item 2: TOTP 2FA
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("احراز هویت دو مرحله‌ای (TOTP)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                text = if (isTotpEnabled) "فعال - آماده استفاده در بازیابی" else "غیرفعال",
+                                fontSize = 11.sp,
+                                color = if (isTotpEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Switch(
+                        checked = isTotpEnabled,
+                        onCheckedChange = { checked ->
+                            if (checked) {
+                                showTotpSetupDialog = true
+                            } else {
+                                showTotpDisableConfirmDialog = true
+                            }
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = "TOTP فقط هنگام بازیابی فایل پشتیبانی لازم است. پشتیبان‌گیری و همگام‌سازی نیازی به آن ندارند.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+
+                if (isTotpEnabled) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = { showTotpDisableConfirmDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("غیرفعال‌سازی TOTP")
+                    }
+                }
+            }
+
+            // Item 3: Master Encryption Password
+            Column {
+                var passwordInput by remember(masterPassword) { mutableStateOf(masterPassword) }
+                var isPasswordVisible by remember { mutableStateOf(false) }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Key, contentDescription = null, tint = com.example.ui.theme.GoldPrimary)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("رمز عبور همگام‌سازی و پشتیبان‌گیری", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(
+                            text = "رمز عبور ثابت برای رمزنگاری فایلهای همگام‌سازی ابری و محلی",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { newValue ->
+                            if (newValue.length <= 70) {
+                                passwordInput = newValue
+                            }
+                        },
+                        label = { Text("کلمه عبور رمزنگاری (تا ۷۰ کاراکتر)") },
+                        placeholder = { Text("کلمه عبور امن خود را وارد کنید") },
+                        singleLine = true,
+                        visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
+                                Icon(
+                                    imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "Toggle Password Visibility"
+                                )
+                            }
+                        },
+                        supportingText = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = if (passwordInput.length in 60..70) "طول کلمه عبور ایده‌آل و امن است" else "طول توصیه شده: \u2068۶۰\u2069 تا \u2068۷۰\u2069 کاراکتر",
+                                    color = if (passwordInput.length in 60..70) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp
+                                )
+                                Text(
+                                    text = "\u2068${passwordInput.length}\u2069 / \u2068۷۰\u2069",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        viewModel.updateMasterEncryptionPassword(passwordInput)
+                        Toast.makeText(context, "کلمه عبور همگام‌سازی با موفقیت ذخیره شد", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = passwordInput.isNotBlank()
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = "Save Password", modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("ذخیره کلمه عبور همگام‌سازی", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // Item 4: FLAG_SECURE Screenshot Protection
+            Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -399,7 +544,7 @@ fun SecuritySettingsScreen(
                         Icon(Icons.Default.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("محافظت در برابر اسکرین‌شات (FLAG_SECURE)", fontWeight = FontWeight.Bold)
+                            Text("محافظت در برابر اسکرین‌شات (FLAG_SECURE)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(
                                 text = "جلوگیری از ضبط صفحه و اسکرین‌شات در صفحات کارت‌ها",
                                 fontSize = 11.sp,
@@ -422,15 +567,9 @@ fun SecuritySettingsScreen(
                     )
                 }
             }
-        }
 
-        // Auto-Clear Clipboard Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            // Item 5: Auto-Clear Clipboard
+            Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -447,7 +586,7 @@ fun SecuritySettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("پاکسازی خودکار کلیپ‌بورد", fontWeight = FontWeight.Bold)
+                            Text("پاکسازی خودکار کلیپ‌بورد", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(
                                 text = "حذف خودکار داده‌های کپی‌شده از حافظه موقت پس از زمان مشخص",
                                 fontSize = 11.sp,
@@ -465,7 +604,7 @@ fun SecuritySettingsScreen(
                 }
 
                 if (isClipboardAutoClearEnabled) {
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
                         text = "پیش‌تنظیم‌های زمان پاکسازی:",
@@ -486,7 +625,7 @@ fun SecuritySettingsScreen(
                                 onClick = { viewModel.setClipboardAutoClearSeconds(sec) },
                                 label = {
                                     Text(
-                                        text = "$sec ثانیه",
+                                        text = "\u2068$sec\u2069 ثانیه",
                                         fontSize = 12.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                     )
@@ -499,7 +638,7 @@ fun SecuritySettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = "مقدار سفارشی (۱ تا ۳۶۰۰ ثانیه):",
+                        text = "مقدار سفارشی (\u2068۱\u2069 تا \u2068۳۶۰۰\u2069 ثانیه):",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -535,7 +674,7 @@ fun SecuritySettingsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = "زمان فعلی: $clipboardAutoClearSeconds ثانیه",
+                        text = "زمان فعلی: \u2068$clipboardAutoClearSeconds\u2069 ثانیه",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -544,214 +683,22 @@ fun SecuritySettingsScreen(
             }
         }
 
-        val isTotpEnabled by viewModel.isTotpEnabled.collectAsState()
-        var showTotpSetupDialog by remember { mutableStateOf(false) }
-        var showTotpDisableConfirmDialog by remember { mutableStateOf(false) }
-
-        // TOTP Security Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        // ==================== GROUP 3: به‌روزرسانی و اطلاعات ====================
+        CollapsibleSectionCard(
+            title = "به‌روزرسانی و اطلاعات",
+            icon = Icons.Default.SystemUpdate,
+            isExpanded = isGroup3Expanded,
+            onToggle = { isGroup3Expanded = !isGroup3Expanded }
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("احراز هویت دو مرحله‌ای (TOTP)", fontWeight = FontWeight.Bold)
-                            Text(
-                                text = if (isTotpEnabled) "فعال - آماده استفاده در بازیابی" else "غیرفعال",
-                                fontSize = 11.sp,
-                                color = if (isTotpEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Switch(
-                        checked = isTotpEnabled,
-                        onCheckedChange = { checked ->
-                            if (checked) {
-                                showTotpSetupDialog = true
-                            } else {
-                                showTotpDisableConfirmDialog = true
-                            }
-                        }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Text(
-                    text = "TOTP فقط هنگام بازیابی فایل پشتیبانی لازم است. پشتیبان‌گیری و همگام‌سازی نیازی به آن ندارند.",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 16.sp
-                )
-
-                if (isTotpEnabled) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = { showTotpDisableConfirmDialog = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("غیرفعال‌سازی TOTP")
-                    }
-                }
-            }
-        }
-
-        if (showTotpSetupDialog) {
-            com.example.ui.components.TotpSetupDialog(
-                onConfirmEnable = { secret ->
-                    viewModel.enableTotp(secret)
-                    showTotpSetupDialog = false
-                    Toast.makeText(context, "احراز هویت دو مرحله‌ای (TOTP) با موفقیت فعال شد", Toast.LENGTH_LONG).show()
-                },
-                onDismiss = { showTotpSetupDialog = false }
-            )
-        }
-
-        if (showTotpDisableConfirmDialog) {
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { showTotpDisableConfirmDialog = false },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            viewModel.disableTotp()
-                            showTotpDisableConfirmDialog = false
-                            Toast.makeText(context, "احراز هویت دو مرحله‌ای غیرفعال شد", Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Text("غیرفعال‌سازی")
-                    }
-                },
-                dismissButton = {
-                    androidx.compose.material3.TextButton(onClick = { showTotpDisableConfirmDialog = false }) {
-                        Text("انصراف")
-                    }
-                },
-                title = { Text("غیرفعال‌سازی TOTP", fontWeight = FontWeight.Bold) },
-                text = { Text("آیا از غیرفعال‌سازی احراز هویت دو مرحله‌ای اطمینان دارید؟ پس از غیرفعال‌سازی، بازیابی فایل‌های پشتیبان نیازی به کد یکبارمصرف نخواهد داشت.") }
-            )
-        }
-
-        val masterPassword by viewModel.masterEncryptionPassword.collectAsState()
-        var passwordInput by remember(masterPassword) { mutableStateOf(masterPassword) }
-        var isPasswordVisible by remember { mutableStateOf(false) }
-
-        // Master Sync Password Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Key, contentDescription = null, tint = com.example.ui.theme.GoldPrimary)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("رمز عبور همگام‌سازی و پشتیبان‌گیری", fontWeight = FontWeight.Bold)
-                        Text(
-                            text = "رمز عبور ثابت برای رمزنگاری فایلهای همگام‌سازی ابری و محلی (بدون نیاز به ورود تکراری)",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                    OutlinedTextField(
-                        value = passwordInput,
-                        onValueChange = { newValue ->
-                            if (newValue.length <= 70) {
-                                passwordInput = newValue
-                            }
-                        },
-                        label = { Text("کلمه عبور رمزنگاری (تا ۷۰ کاراکتر)") },
-                        placeholder = { Text("کلمه عبور امن خود را وارد کنید") },
-                        singleLine = true,
-                        visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { isPasswordVisible = !isPasswordVisible }) {
-                                Icon(
-                                    imageVector = if (isPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = "Toggle Password Visibility"
-                                )
-                            }
-                        },
-                        supportingText = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = if (passwordInput.length in 60..70) "طول کلمه عبور ایده‌آل و امن است" else "طول توصیه شده: ۶۰ تا ۷۰ کاراکتر",
-                                    color = if (passwordInput.length in 60..70) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 10.sp
-                                )
-                                Text(
-                                    text = "${passwordInput.length} / ۷۰",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Button(
-                    onClick = {
-                        viewModel.updateMasterEncryptionPassword(passwordInput)
-                        Toast.makeText(context, "کلمه عبور همگام‌سازی با موفقیت ذخیره شد", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = passwordInput.isNotBlank()
-                ) {
-                    Icon(Icons.Default.Save, contentDescription = "Save Password", modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("ذخیره کلمه عبور همگام‌سازی", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // Check for Updates Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            // Item 1: Check for Updates
+            Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = com.example.ui.theme.GoldPrimary)
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("بررسی به‌روزرسانی برنامه", fontWeight = FontWeight.Bold)
+                        Text("بررسی به‌روزرسانی برنامه", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         Text(
-                            text = "ارتباط با گیتهاب (https://github.com/KhtaAi/Cartino) جهت دریافت نسخه جدید",
+                            text = "ارتباط با گیتهاب جهت دریافت نسخه جدید",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -810,7 +757,9 @@ fun SecuritySettingsScreen(
                     }
                     is UpdateCheckState.Checking -> {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -840,7 +789,7 @@ fun SecuritySettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = ButtonDefaults.buttonColors(containerColor = com.example.ui.theme.GoldPrimary)
                             ) {
-                                Text("دریافت نسخه جدید از گیتهاب (Releases)", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.Bold)
+                                Text("دریافت نسخه جدید از گیتهاب (Releases)", color = Color.Black, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -849,13 +798,13 @@ fun SecuritySettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = androidx.compose.ui.graphics.Color(0xFF10B981))
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF10B981))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "برنامه شما آپدیت است (${state.installedVersion})",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = androidx.compose.ui.graphics.Color(0xFF10B981)
+                                color = Color(0xFF10B981)
                             )
                         }
                     }
@@ -877,54 +826,167 @@ fun SecuritySettingsScreen(
                     }
                 }
             }
-        }
 
-        // Encryption Standards Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            // Item 2: About Cartino & Database Security Details
+            Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                    Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text("استاندارد رمزنگاری دیتابیس", fontWeight = FontWeight.Bold)
+                    Text("درباره Cartino و امنیت داده‌ها", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "تمام رکوردها و فایلهای داخل برنامه Cartino با استفاده از الگوریتم پیشرفته AES-256 و کلیدهای امنیتی Android KeyStore به صورت آفلاین ذخیره می‌شوند.",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
 
-        // App Information Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Info, contentDescription = null)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text("درباره Cartino", fontWeight = FontWeight.Bold)
-                }
                 Spacer(modifier = Modifier.height(8.dp))
+
                 Text(
                     text = "Cartino اپلیکیشن حرفه‌ای و امن مدیریت کارت‌های بانکی و مدارک شناسایی ایرانی با قابلیت اسکن هوشمند OCR، همگام‌سازی ابری WebDAV و پشتیبان‌گیری محلی است.",
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp
                 )
-                Spacer(modifier = Modifier.height(6.dp))
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Text(
-                    text = "نسخه نصب‌شده: v$versionName",
+                    text = "تمام رکوردها با الگوریتم پیشرفته AES-256 (پایه‌گذاری شده بر Argon2id) و کلیدهای امنیتی Android KeyStore به‌صورت آفلاین ذخیره می‌شوند.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "نسخه نصب‌شده: v\u2068$versionName\u2069",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+        }
+    }
+
+    // Dialogs at Screen level
+    if (showTotpSetupDialog) {
+        com.example.ui.components.TotpSetupDialog(
+            onConfirmEnable = { secret ->
+                viewModel.enableTotp(secret)
+                showTotpSetupDialog = false
+                Toast.makeText(context, "احراز هویت دو مرحله‌ای (TOTP) با موفقیت فعال شد", Toast.LENGTH_LONG).show()
+            },
+            onDismiss = { showTotpSetupDialog = false }
+        )
+    }
+
+    if (showTotpDisableConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showTotpDisableConfirmDialog = false },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.disableTotp()
+                        showTotpDisableConfirmDialog = false
+                        Toast.makeText(context, "احراز هویت دو مرحله‌ای غیرفعال شد", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("غیرفعال‌سازی")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTotpDisableConfirmDialog = false }) {
+                    Text("انصراف")
+                }
+            },
+            title = { Text("غیرفعال‌سازی TOTP", fontWeight = FontWeight.Bold) },
+            text = { Text("آیا از غیرفعال‌سازی احراز هویت دو مرحله‌ای اطمینان دارید؟ پس از غیرفعال‌سازی، بازیابی فایل‌های پشتیبان نیازی به کد یکبارمصرف نخواهد داشت.") }
+        )
+    }
+}
+
+@Composable
+private fun CollapsibleSectionCard(
+    title: String,
+    icon: ImageVector,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val rotationAngle by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "ArrowRotation"
+    )
+
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessLow
+                )
+            )
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = if (isExpanded) "بستن گروه" else "بازکردن گروه",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .rotate(rotationAngle)
+                )
+            }
+
+            if (isExpanded) {
+                HorizontalDivider(
+                    modifier = Modifier.fillMaxWidth(),
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    content()
+                }
             }
         }
     }
