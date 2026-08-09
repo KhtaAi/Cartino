@@ -21,7 +21,7 @@ object IranianBankHelper {
     val banks = listOf(
         IranianBank(
             name = "بانک ملی ایران",
-            binPrefixes = listOf("603799", "170019", "603769"),
+            binPrefixes = listOf("603799", "170019"),
             colorStartHex = "#1E3A8A",
             colorEndHex = "#0284C7",
             logoSymbol = "MELLI"
@@ -63,7 +63,7 @@ object IranianBankHelper {
         ),
         IranianBank(
             name = "بانک صادرات ایران",
-            binPrefixes = listOf("603769", "019000"),
+            binPrefixes = listOf("603769", "903769"),
             colorStartHex = "#1E40AF",
             colorEndHex = "#3B82F6",
             logoSymbol = "SADERAT"
