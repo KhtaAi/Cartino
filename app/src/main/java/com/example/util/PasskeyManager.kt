@@ -75,13 +75,13 @@ object PasskeyManager {
                 SecureRandom().nextBytes(challenge)
                 val challengeBase64Url = Base64.encodeToString(challenge, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
 
-                val userIdBytes = "cartino_user_id".toByteArray(Charsets.UTF_8)
+                val userIdBytes = ByteArray(16)
+                SecureRandom().nextBytes(userIdBytes)
                 val userIdBase64Url = Base64.encodeToString(userIdBytes, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
 
                 val requestJson = JSONObject().apply {
                     put("rp", JSONObject().apply {
                         put("name", "Cartino")
-                        put("id", "cartino.app")
                     })
                     put("user", JSONObject().apply {
                         put("id", userIdBase64Url)
@@ -102,9 +102,9 @@ object PasskeyManager {
                     put("timeout", 60000)
                     put("authenticatorSelection", JSONObject().apply {
                         put("authenticatorAttachment", "platform")
-                        put("requireResidentKey", true)
-                        put("residentKey", "required")
-                        put("userVerification", "required")
+                        put("requireResidentKey", false)
+                        put("residentKey", "preferred")
+                        put("userVerification", "preferred")
                     })
                     put("attestation", "none")
                 }.toString()
@@ -127,13 +127,19 @@ object PasskeyManager {
                         .putString(KEY_PASSKEY_ENABLED, "true")
                         .apply()
 
+                    SyncLogger.log("SYNC_PASSKEY", "Passkey registration succeeded: $credentialId")
                     onSuccess(credentialId)
                 } else {
+                    SyncLogger.log("SYNC_PASSKEY", "Passkey registration returned unexpected result")
                     onError("پاسخ نامعتبر از سیستم Passkey دریافت شد.")
                 }
             } catch (e: CreateCredentialException) {
-                onError("خطا در ساخت کلید Passkey: ${e.localizedMessage ?: "کاربر انصراف داد یا سنسور در دسترس نیست."}")
+                val errDetails = "[${e.javaClass.simpleName}] type=${e.type}, msg=${e.errorMessage ?: e.message}"
+                SyncLogger.log("SYNC_PASSKEY", "CreateCredentialException: $errDetails")
+                onError("خطا در ساخت کلید Passkey: $errDetails")
             } catch (e: Throwable) {
+                val errDetails = "[${e.javaClass.simpleName}] ${e.localizedMessage ?: e.message}"
+                SyncLogger.log("SYNC_PASSKEY", "Create Throwable: $errDetails")
                 // If running in environment without Play Services or CredentialManager provider, fallback for local mock credential creation
                 val fallbackId = "cartino_passkey_${System.currentTimeMillis()}"
                 val prefs = getEncryptedPrefs(activity)
@@ -169,14 +175,13 @@ object PasskeyManager {
                 val getJson = JSONObject().apply {
                     put("challenge", challengeBase64Url)
                     put("timeout", 60000)
-                    put("rpId", "cartino.app")
                     put("allowCredentials", JSONArray().apply {
                         put(JSONObject().apply {
                             put("type", "public-key")
                             put("id", credentialId)
                         })
                     })
-                    put("userVerification", "required")
+                    put("userVerification", "preferred")
                 }.toString()
 
                 val getOption = GetPublicKeyCredentialOption(getJson)
@@ -193,19 +198,25 @@ object PasskeyManager {
                         .putString(KEY_LAST_CHALLENGE, challengeBase64Url)
                         .putString(KEY_LAST_SIGNATURE, authResponseJson)
                         .apply()
+                    SyncLogger.log("SYNC_PASSKEY", "Passkey verification succeeded")
                     onSuccess()
                 } else {
+                    SyncLogger.log("SYNC_PASSKEY", "Passkey verification returned unexpected credential type")
                     onError("احراز هویت با Passkey ناموفق بود.")
                 }
             } catch (e: GetCredentialException) {
-                onError("خطا در دریافت اعتبارنامه Passkey: ${e.localizedMessage ?: "کنسل شد"}")
+                val errDetails = "[${e.javaClass.simpleName}] type=${e.type}, msg=${e.errorMessage ?: e.message}"
+                SyncLogger.log("SYNC_PASSKEY", "GetCredentialException: $errDetails")
+                onError("خطا در دریافت اعتبارنامه Passkey: $errDetails")
             } catch (e: Throwable) {
+                val errDetails = "[${e.javaClass.simpleName}] ${e.localizedMessage ?: e.message}"
+                SyncLogger.log("SYNC_PASSKEY", "Get Throwable: $errDetails")
                 // If running in environment without Play Services or CredentialManager provider, fallback verification
                 val prefs = getEncryptedPrefs(activity)
                 if (prefs.getString(KEY_PASSKEY_ENABLED, "false") == "true") {
                     onSuccess()
                 } else {
-                    onError("خطای احراز هویت Passkey: ${e.localizedMessage ?: "احراز هویت ناموفق"}")
+                    onError("خطای احراز هویت Passkey: $errDetails")
                 }
             }
         }
