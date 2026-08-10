@@ -140,7 +140,7 @@ object SecurityManager {
     fun authenticateBiometric(
         activity: FragmentActivity,
         title: String = "ورود به کارتینو",
-        subtitle: String = "برای دسترسی به اطلاعات کارت‌ها اثر انگشت یا چهره خود را اسکن کنید",
+        subtitle: String = "برای دسترسی به اطلاعات کارت‌ها اثر انگشت خود را اسکن کنید",
         onSuccess: () -> Unit,
         onError: (String) -> Unit
     ) {

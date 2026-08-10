@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -36,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -74,6 +76,20 @@ import com.example.ui.theme.GoldPrimary
 import com.example.ui.theme.TextMutedDark
 import com.example.util.SecurityManager
 import com.example.util.findActivity
+import com.example.util.ExpiringItem
+import com.example.util.ExpiryCheckWorker
+import com.example.util.ExpiryNotificationManager
+import com.example.util.ExpiryReminderManager
+import com.example.ui.components.JalaliDatePickerDialog
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.ExistingPeriodicWorkPolicy
+import java.util.concurrent.TimeUnit
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+import androidx.activity.ComponentActivity
 
 enum class CartinoTab(val titleFa: String) {
     CARDS("کارت‌ها"),
@@ -101,45 +117,65 @@ fun MainScreen(
     var isUnlocked by remember { mutableStateOf(!isBiometricEnabled) }
     var showScannedDialog by remember { mutableStateOf(false) }
 
-    var showExpiryAlertDialog by remember { mutableStateOf(false) }
-    var expiringAlerts by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var showNotificationExpiryDialog by remember { mutableStateOf(false) }
+    var notificationDialogItems by remember { mutableStateOf<List<ExpiringItem>>(emptyList()) }
+    var showDatePickerForSnooze by remember { mutableStateOf(false) }
+    var earliestExpiryItem by remember { mutableStateOf<ExpiringItem?>(null) }
 
-    // Check for expiring cards and documents
-    LaunchedEffect(cards, documents, isUnlocked) {
+    // Request notification permission once if Android 13+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                val activity = context.findActivity() as? ComponentActivity
+                activity?.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+    }
+
+    // Register daily worker & execute immediate expiry check when unlocked
+    LaunchedEffect(isUnlocked, cards, documents) {
         if (isUnlocked) {
-            val alerts = mutableListOf<Pair<String, String>>()
-
-            cards.forEach { card ->
-                val remaining = JalaliCalendarHelper.monthsUntilCardExpiry(card.expiryYear, card.expiryMonth)
-                if (remaining != null && remaining <= card.reminderMonthsBefore) {
-                    val cardTitle = "کارت ${card.bankName} (${card.cardHolderName.ifBlank { if (card.cardNumber.length >= 4) card.cardNumber.takeLast(4) else card.cardNumber }})"
-                    val detail = when {
-                        remaining < 0 -> "${kotlin.math.abs(remaining)} ماه پیش منقضی شده"
-                        remaining == 0 -> "این ماه منقضی می‌شود"
-                        else -> "$remaining ماه دیگر منقضی می‌شود"
-                    }
-                    alerts.add(cardTitle to detail)
-                }
+            try {
+                val workRequest = PeriodicWorkRequestBuilder<ExpiryCheckWorker>(24, TimeUnit.HOURS).build()
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    "ExpiryCheckWorker",
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    workRequest
+                )
+            } catch (e: Throwable) {
+                // Ignore worker errors if any
             }
 
-            documents.forEach { doc ->
-                if (doc.expiryDate.isNotBlank()) {
-                    val remaining = JalaliCalendarHelper.monthsUntilJalaliDate(doc.expiryDate)
-                    if (remaining != null && remaining <= doc.reminderMonthsBefore) {
-                        val docTitle = "مدرک ${doc.title}"
-                        val detail = when {
-                            remaining < 0 -> "${kotlin.math.abs(remaining)} ماه پیش منقضی شده"
-                            remaining == 0 -> "این ماه منقضی می‌شود"
-                            else -> "$remaining ماه دیگر منقضی می‌شود"
-                        }
-                        alerts.add(docTitle to detail)
-                    }
-                }
+            val dueItems = ExpiryReminderManager.getDueExpiringItems(cards, documents, context)
+            if (dueItems.isNotEmpty()) {
+                ExpiryNotificationManager.sendExpirySummaryNotification(context, dueItems)
             }
+        }
+    }
 
-            if (alerts.isNotEmpty()) {
-                expiringAlerts = alerts
-                showExpiryAlertDialog = true
+    // Handle Intent when app is opened via notification click
+    LaunchedEffect(isUnlocked, cards, documents) {
+        if (isUnlocked) {
+            val activity = context.findActivity()
+            val intent = activity?.intent
+            if (intent != null && intent.getBooleanExtra("from_expiry_notification", false)) {
+                val notifIds = intent.getStringArrayExtra("notification_item_ids")?.toList() ?: emptyList()
+                val dueItems = ExpiryReminderManager.getDueExpiringItems(cards, documents, context)
+                val itemsToShow = if (notifIds.isNotEmpty()) {
+                    val filtered = dueItems.filter { it.id in notifIds }
+                    if (filtered.isNotEmpty()) filtered else dueItems
+                } else {
+                    dueItems
+                }
+
+                if (itemsToShow.isNotEmpty()) {
+                    notificationDialogItems = itemsToShow
+                    showNotificationExpiryDialog = true
+                }
+
+                // Consume intent extras immediately
+                intent.removeExtra("from_expiry_notification")
+                intent.removeExtra("notification_item_ids")
             }
         }
     }
@@ -262,7 +298,7 @@ fun MainScreen(
                         ) {
                             Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("بازکردن با اثر انگشت / چهره")
+                            Text("بازکردن با اثر انگشت")
                         }
                     }
                 }
@@ -377,12 +413,12 @@ fun MainScreen(
                 )
             }
 
-            if (showExpiryAlertDialog && expiringAlerts.isNotEmpty()) {
+            if (showNotificationExpiryDialog && notificationDialogItems.isNotEmpty()) {
                 AlertDialog(
-                    onDismissRequest = { showExpiryAlertDialog = false },
+                    onDismissRequest = { showNotificationExpiryDialog = false },
                     icon = {
                         Icon(
-                            imageVector = Icons.Default.Warning,
+                            imageVector = Icons.Default.NotificationsActive,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(32.dp)
@@ -390,7 +426,7 @@ fun MainScreen(
                     },
                     title = {
                         Text(
-                            text = "هشدار تاریخ انقضا",
+                            text = "یادآور انقضای کارت‌ها و مدارک",
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp
                         )
@@ -398,12 +434,12 @@ fun MainScreen(
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = "موارد زیر در آستانه انقضا قرار دارند یا منقضی شده‌اند. لطفاً جهت تمدید آن‌ها اقدام کنید:",
+                                text = "موارد زیر نیاز به تمدید یا توجه دارند:",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.height(4.dp))
-                            expiringAlerts.forEach { (title, detail) ->
+                            notificationDialogItems.forEach { item ->
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
                                     color = MaterialTheme.colorScheme.surfaceVariant,
@@ -415,14 +451,14 @@ fun MainScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = title,
+                                            text = item.title,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 13.sp,
                                             modifier = Modifier.weight(1f, fill = false)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = detail,
+                                            text = item.detail,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.error
@@ -433,9 +469,46 @@ fun MainScreen(
                         }
                     },
                     confirmButton = {
-                        Button(onClick = { showExpiryAlertDialog = false }) {
-                            Text("متوجه شدم")
+                        Button(
+                            onClick = {
+                                val earliest = notificationDialogItems.minByOrNull {
+                                    String.format("%04d/%02d/%02d", it.expiryYear, it.expiryMonth, it.expiryDay)
+                                }
+                                earliestExpiryItem = earliest
+                                showDatePickerForSnooze = true
+                            }
+                        ) {
+                            Text("دوباره یادآوری کن")
                         }
+                    },
+                    dismissButton = {
+                        OutlinedButton(
+                            onClick = {
+                                ExpiryReminderManager.dismissItems(context, notificationDialogItems.map { it.id })
+                                showNotificationExpiryDialog = false
+                            }
+                        ) {
+                            Text("دیگر نشان نده")
+                        }
+                    }
+                )
+            }
+
+            if (showDatePickerForSnooze && earliestExpiryItem != null) {
+                JalaliDatePickerDialog(
+                    initialYear = earliestExpiryItem?.expiryYear,
+                    initialMonth = earliestExpiryItem?.expiryMonth,
+                    initialDay = earliestExpiryItem?.expiryDay,
+                    showDay = true,
+                    onDismiss = { showDatePickerForSnooze = false },
+                    onSelect = { y, m, d ->
+                        val selectedJalaliStr = String.format("%04d/%02d/%02d", y, m, d)
+                        val todayJalaliStr = JalaliCalendarHelper.getCurrentJalaliDate().toString()
+                        val finalSnoozeDate = if (selectedJalaliStr < todayJalaliStr) todayJalaliStr else selectedJalaliStr
+
+                        ExpiryReminderManager.snoozeItems(context, notificationDialogItems.map { it.id }, finalSnoozeDate)
+                        showDatePickerForSnooze = false
+                        showNotificationExpiryDialog = false
                     }
                 )
             }

@@ -362,6 +362,10 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     fun addOrUpdateCard(card: BankCard) {
         viewModelScope.launch {
             try {
+                val existing = cardDao.getCardById(card.id)
+                if (existing != null && (existing.expiryYear != card.expiryYear || existing.expiryMonth != card.expiryMonth)) {
+                    com.example.util.ExpiryReminderManager.clearItemState(getApplication(), "card_${card.id}")
+                }
                 cardDao.insertCard(card.encrypted())
             } catch (e: Throwable) {
                 _syncState.value = SyncUiState.Error("خطا در رمزنگاری و ذخیره‌سازی کارت: ${e.localizedMessage}")
@@ -371,6 +375,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteCard(card: BankCard) {
         viewModelScope.launch {
+            com.example.util.ExpiryReminderManager.clearItemState(getApplication(), "card_${card.id}")
             cardDao.deleteCardById(card.id)
         }
     }
@@ -389,6 +394,10 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     fun addOrUpdateDocument(doc: IdentityDocument) {
         viewModelScope.launch {
             try {
+                val existing = docDao.getDocumentById(doc.id)
+                if (existing != null && existing.expiryDate != doc.expiryDate) {
+                    com.example.util.ExpiryReminderManager.clearItemState(getApplication(), "doc_${doc.id}")
+                }
                 docDao.insertDocument(doc.encrypted())
             } catch (e: Throwable) {
                 _syncState.value = SyncUiState.Error("خطا در رمزنگاری و ذخیره‌سازی مدرک: ${e.localizedMessage}")
@@ -398,6 +407,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteDocument(doc: IdentityDocument) {
         viewModelScope.launch {
+            com.example.util.ExpiryReminderManager.clearItemState(getApplication(), "doc_${doc.id}")
             docDao.deleteDocumentById(doc.id)
         }
     }

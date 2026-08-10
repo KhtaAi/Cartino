@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -110,6 +112,7 @@ private sealed interface UpdateCheckState {
     data class Error(val message: String) : UpdateCheckState
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SecuritySettingsScreen(
     viewModel: CartinoViewModel,
@@ -353,7 +356,7 @@ fun SecuritySettingsScreen(
                         Icon(Icons.Default.Fingerprint, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("قفل بیومتریک (اثر انگشت/چهره)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("قفل بیومتریک (اثر انگشت)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Text(
                                 text = if (isBiometricHardwareAvailable) "سنسور بیومتریک دستگاه فعال است" else "سنسور بیومتریک روی دستگاه یافت نشد",
                                 fontSize = 11.sp,
@@ -574,7 +577,7 @@ fun SecuritySettingsScreen(
                                 SecurityManager.authenticateBiometric(
                                     activity = activity,
                                     title = "احراز هویت بیومتریک",
-                                    subtitle = "برای مشاهده رمز عبور همگام‌سازی اثر انگشت یا چهره خود را اسکن کنید",
+                                    subtitle = "برای مشاهده رمز عبور همگام‌سازی اثر انگشت خود را اسکن کنید",
                                     onSuccess = {
                                         passwordInput = masterPassword
                                     },
@@ -744,9 +747,10 @@ fun SecuritySettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     val presets = listOf(5, 15, 30, 60, 120)
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         presets.forEach { sec ->
                             val isSelected = (clipboardAutoClearSeconds == sec)
