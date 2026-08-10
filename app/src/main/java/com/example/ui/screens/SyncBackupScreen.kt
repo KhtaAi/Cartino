@@ -117,9 +117,7 @@ fun SyncBackupScreen(
 
     var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
     val isTotpEnabled by viewModel.isTotpEnabled.collectAsState()
-    val isPasskeyEnabled by viewModel.isPasskeyEnabled.collectAsState()
     var showTotpVerifyDialog by remember { mutableStateOf(false) }
-    var showPasskeyVerifyDialog by remember { mutableStateOf(false) }
     var pendingRestorePassword by remember { mutableStateOf("") }
     var pendingRestoreTarget by remember { mutableStateOf(BackupTarget.LOCAL_FILE) }
 
@@ -575,11 +573,7 @@ fun SyncBackupScreen(
                     onClick = {
                         showPasswordDialog = false
                         val effectivePwd = passwordInput.ifBlank { masterPassword }
-                        if (activeAction == ActionType.RESTORE && isPasskeyEnabled) {
-                            pendingRestorePassword = effectivePwd
-                            pendingRestoreTarget = activeTarget
-                            showPasskeyVerifyDialog = true
-                        } else if (activeAction == ActionType.RESTORE && isTotpEnabled) {
+                        if (activeAction == ActionType.RESTORE && isTotpEnabled) {
                             pendingRestorePassword = effectivePwd
                             pendingRestoreTarget = activeTarget
                             showTotpVerifyDialog = true
@@ -667,27 +661,6 @@ fun SyncBackupScreen(
             },
             onDismiss = {
                 showTotpVerifyDialog = false
-            }
-        )
-    }
-
-    if (showPasskeyVerifyDialog) {
-        com.example.ui.components.PasskeyVerifyDialog(
-            onSuccess = {
-                showPasskeyVerifyDialog = false
-                when (pendingRestoreTarget) {
-                    BackupTarget.WEBDAV -> {
-                        viewModel.restoreFromWebDav(pendingRestorePassword, totpCode = "VERIFIED")
-                    }
-                    BackupTarget.LOCAL_FILE -> {
-                        pendingRestoreUri?.let { uri ->
-                            viewModel.restoreLocalBackupFromUri(uri, pendingRestorePassword, totpCode = "VERIFIED")
-                        }
-                    }
-                }
-            },
-            onDismiss = {
-                showPasskeyVerifyDialog = false
             }
         )
     }

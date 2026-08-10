@@ -193,6 +193,22 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     )
     val totpSecret: StateFlow<String> = _totpSecret.asStateFlow()
 
+    private val _webDavConfig = MutableStateFlow(
+        WebDavConfig(
+            serverUrl = safeGetEncryptedString("webdav_server_url", ""),
+            username = safeGetEncryptedString("webdav_username", ""),
+            password = safeGetEncryptedString("webdav_password", ""),
+            remotePath = safeGetEncryptedString("webdav_remote_path", "cartino_backup.enc")
+        )
+    )
+    val webDavConfig: StateFlow<WebDavConfig> = _webDavConfig.asStateFlow()
+
+    fun verifyTotpCode(code: String): Boolean {
+        val secret = _totpSecret.value
+        if (secret.isBlank()) return false
+        return TotpManager.verifyTotp(secret, code)
+    }
+
     fun enableTotp(secret: String) {
         safePutEncryptedString("totp_secret", secret)
         safePutEncryptedString("totp_enabled", "true")
@@ -209,45 +225,25 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         SyncLogger.log("TOTP", "احراز هویت دو مرحله‌ای (TOTP) غیرفعال شد")
     }
 
-    private val _isPasskeyEnabled = MutableStateFlow(
-        safeGetEncryptedString("passkey_enabled", "false") == "true"
-    )
-    val isPasskeyEnabled: StateFlow<Boolean> = _isPasskeyEnabled.asStateFlow()
-
-    fun enablePasskey() {
-        safePutEncryptedString("passkey_enabled", "true")
-        _isPasskeyEnabled.value = true
-        SyncLogger.log("PASSKEY", "احراز هویت دو مرحله‌ای (Passkey) فعال شد")
-    }
-
-    fun disablePasskey() {
-        com.example.util.PasskeyManager.disablePasskey(getApplication())
-        safePutEncryptedString("passkey_enabled", "false")
-        _isPasskeyEnabled.value = false
-        SyncLogger.log("PASSKEY", "احراز هویت دو مرحله‌ای (Passkey) غیرفعال شد")
-    }
-
-    fun verifyPasskeySignature(challenge: ByteArray, signature: ByteArray): Boolean {
-        return com.example.util.PasskeyManager.verifyPasskeySignature(getApplication(), challenge, signature)
-    }
-
-    fun verifyTotpCode(code: String): Boolean {
-        val secret = _totpSecret.value
-        if (secret.isBlank()) return false
-        return TotpManager.verifyTotp(secret, code)
-    }
-
-    private val _webDavConfig = MutableStateFlow(
-        WebDavConfig(
-            serverUrl = safeGetEncryptedString("webdav_server_url", ""),
-            username = safeGetEncryptedString("webdav_username", ""),
-            password = safeGetEncryptedString("webdav_password", ""),
-            remotePath = safeGetEncryptedString("webdav_remote_path", "cartino_backup.enc")
-        )
-    )
-    val webDavConfig: StateFlow<WebDavConfig> = _webDavConfig.asStateFlow()
-
     init {
+        // Clean up legacy passkey preference keys
+        safePutEncryptedString("passkey_enabled", "")
+        safePutEncryptedString("passkey_secret", "")
+        safePutEncryptedString("passkey_credential_id", "")
+        safePutEncryptedString("passkey_public_key", "")
+        safePutEncryptedString("passkey_last_challenge", "")
+        safePutEncryptedString("passkey_last_signature", "")
+        try {
+            plainPrefs.edit()
+                .remove("passkey_enabled")
+                .remove("passkey_secret")
+                .remove("passkey_credential_id")
+                .remove("passkey_public_key")
+                .remove("passkey_last_challenge")
+                .remove("passkey_last_signature")
+                .apply()
+        } catch (e: Throwable) {}
+
         // Migrate legacy plain shared preferences passwords if present
         val oldMasterPass = try { plainPrefs.getString("master_sync_password", null) } catch (e: Throwable) { null }
         val oldWebdavPass = try { plainPrefs.getString("webdav_password", null) } catch (e: Throwable) { null }

@@ -761,6 +761,7 @@ ANY repository with zero edits:
 - Font pipeline: Vazirmatn via base64 TEXT in app/fontsrc/ + build-time decode (verified 2026-08-07)
 - Last verified OTA update test: v0.1.2 -> v1.0.0, 2026-08-07
 - Key rotation history: (none — fresh public launch; no legacy committed key)
+- قابلیت Passkey/FIDO2 در تاریخ 2026-08-10 به تصمیم نگهدارنده به دلیل پیچیدگی پیادهسازی بدون سرور اختصاصی، بهطور کامل حذف شد.
 ```
 
 ---
