@@ -643,18 +643,15 @@ fun SyncBackupScreen(
 
     if (showTotpVerifyDialog) {
         com.example.ui.components.TotpVerifyDialog(
-            onVerify = { code ->
-                viewModel.verifyTotpCode(code)
-            },
-            onSuccess = {
+            onSuccess = { code ->
                 showTotpVerifyDialog = false
                 when (pendingRestoreTarget) {
                     BackupTarget.WEBDAV -> {
-                        viewModel.restoreFromWebDav(pendingRestorePassword, totpCode = "VERIFIED")
+                        viewModel.restoreFromWebDav(pendingRestorePassword, totpCode = code)
                     }
                     BackupTarget.LOCAL_FILE -> {
                         pendingRestoreUri?.let { uri ->
-                            viewModel.restoreLocalBackupFromUri(uri, pendingRestorePassword, totpCode = "VERIFIED")
+                            viewModel.restoreLocalBackupFromUri(uri, pendingRestorePassword, totpCode = code)
                         }
                     }
                 }

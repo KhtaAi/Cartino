@@ -269,6 +269,12 @@ fun SecuritySettingsScreen(
                 }
             }
 
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            )
+
             // Item 2: UI Color Palette Selection
             Column {
                 Text("۲- پالت رنگی کامل UI برنامه", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -389,6 +395,12 @@ fun SecuritySettingsScreen(
                 }
             }
 
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            )
+
             // Item 2: TOTP 2FA
             Column {
                 Row(
@@ -452,6 +464,12 @@ fun SecuritySettingsScreen(
                     }
                 }
             }
+
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            )
 
             // Item 3: Master Encryption Password
             Column {
@@ -530,6 +548,12 @@ fun SecuritySettingsScreen(
                 }
             }
 
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            )
+
             // Item 4: FLAG_SECURE Screenshot Protection
             Column {
                 Row(
@@ -567,6 +591,12 @@ fun SecuritySettingsScreen(
                     )
                 }
             }
+
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            )
 
             // Item 5: Auto-Clear Clipboard
             Column {
@@ -826,6 +856,12 @@ fun SecuritySettingsScreen(
                     }
                 }
             }
+
+            HorizontalDivider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            )
 
             // Item 2: About Cartino & Database Security Details
             Column {

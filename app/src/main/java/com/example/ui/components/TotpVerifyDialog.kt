@@ -37,8 +37,8 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun TotpVerifyDialog(
-    onVerify: (code: String) -> Boolean,
-    onSuccess: () -> Unit,
+    onVerify: ((code: String) -> Boolean)? = null,
+    onSuccess: (code: String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var codeInput by remember { mutableStateOf("") }
@@ -54,10 +54,10 @@ fun TotpVerifyDialog(
                         errorMessage = "کد باید ۶ رقم باشد"
                         return@Button
                     }
-                    val isCorrect = onVerify(cleanCode)
+                    val isCorrect = onVerify?.invoke(cleanCode) ?: true
                     if (isCorrect) {
                         errorMessage = null
-                        onSuccess()
+                        onSuccess(cleanCode)
                     } else {
                         errorMessage = "کد TOTP واردشده اشتباه است یا منقضی شده است."
                     }

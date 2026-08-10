@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit
 
 data class BackupPayload(
     val version: Int = 1,
+    val totpSecret: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val totpRequired: Boolean = false,
     val cards: List<BankCard> = emptyList(),
@@ -68,6 +69,45 @@ object BackupSyncManager {
         }
     }
 
+    private fun getTotpSecretFromPrefs(context: Context): String {
+        return try {
+            val masterKey = androidx.security.crypto.MasterKey.Builder(context)
+                .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            val prefs = androidx.security.crypto.EncryptedSharedPreferences.create(
+                context,
+                "cartino_encrypted_prefs",
+                masterKey,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            prefs.getString("totp_secret", "") ?: ""
+        } catch (e: Throwable) {
+            ""
+        }
+    }
+
+    private fun saveTotpSecretToPrefs(context: Context, secret: String) {
+        try {
+            val masterKey = androidx.security.crypto.MasterKey.Builder(context)
+                .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            val prefs = androidx.security.crypto.EncryptedSharedPreferences.create(
+                context,
+                "cartino_encrypted_prefs",
+                masterKey,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            prefs.edit()
+                .putString("totp_secret", secret)
+                .putString("totp_enabled", "true")
+                .apply()
+        } catch (e: Throwable) {
+            SyncLogger.log("RESTORE", "خطا در ذخیره‌سازی TOTP Secret: ${e.message}")
+        }
+    }
+
     /**
      * Generates an encrypted backup payload string from Room DB using user password.
      */
@@ -78,9 +118,14 @@ object BackupSyncManager {
         val docs = db.identityDocumentDao().getAllDocuments().first().map { it.decrypted() }
 
         val totpActive = isTotpEnabledInPrefs(context)
+        val secret = if (totpActive) getTotpSecretFromPrefs(context) else ""
+        if (totpActive && secret.isNotBlank()) {
+            SyncLogger.log("BACKUP", "Secret TOTP با موفقیت در فایل پشتیبان ذخیره شد")
+        }
         SyncLogger.log("BACKUP", "تعداد کارت‌ها: ${cards.size} | تعداد مدارک: ${docs.size} | TOTP: ${if (totpActive) "فعال" else "غیرفعال"}")
 
         val payload = BackupPayload(
+            totpSecret = secret,
             totpRequired = totpActive,
             cards = cards,
             documents = docs
@@ -101,7 +146,7 @@ object BackupSyncManager {
         context: Context,
         encryptedBase64: String,
         password: String,
-        totpVerifier: (suspend () -> Boolean)? = null
+        totpCode: String? = null
     ): Pair<Int, Int> = withContext(Dispatchers.IO) {
         SyncLogger.log("RESTORE", "شروع رمزگشایی بسته داده‌ها...")
         val decryptedJson = try {
@@ -119,11 +164,19 @@ object BackupSyncManager {
 
         if (payload.totpRequired) {
             SyncLogger.log("RESTORE", "این فایل پشتیبان به احراز هویت دو مرحله‌ای (TOTP) نیاز دارد")
-            if (totpVerifier == null || !totpVerifier()) {
-                SyncLogger.log("RESTORE", "خطا: تایید کد TOTP انجام نشد یا ناموفق بود")
-                throw IllegalArgumentException("برای بازیابی این فایل پشتیبان، تایید کد TOTP الزامی است.")
+            val backupSecret = payload.totpSecret
+            if (backupSecret.isBlank()) {
+                SyncLogger.log("RESTORE", "خطا: فایل پشتیبان قدیمی است و Secret TOTP در آن موجود نیست")
+                throw IllegalArgumentException("این فایل پشتیبان قدیمی است و Secret TOTP در آن ذخیره نشده. لطفاً از نسخه جدیدتر بکآپ بگیرید.")
             }
-            SyncLogger.log("RESTORE", "احراز هویت دو مرحله‌ای TOTP با موفقیت تایید گردید")
+
+            if (totpCode.isNullOrBlank() || !TotpManager.verifyTotp(backupSecret, totpCode)) {
+                SyncLogger.log("RESTORE", "خطا: کد TOTP واردشده اشتباه است یا با Secret بکآپ مطابقت ندارد")
+                throw IllegalArgumentException("کد TOTP واردشده با Secret ذخیره‌شده در بکآپ مطابقت ندارد.")
+            }
+
+            saveTotpSecretToPrefs(context, backupSecret)
+            SyncLogger.log("RESTORE", "TOTP Secret از بکآپ بازیابی و در دستگاه فعال شد.")
         }
 
         val db = CartinoDatabase.getDatabase(context)
@@ -167,7 +220,7 @@ object BackupSyncManager {
         context: Context,
         uri: Uri,
         password: String,
-        totpVerifier: (suspend () -> Boolean)? = null
+        totpCode: String? = null
     ): Pair<Int, Int> = withContext(Dispatchers.IO) {
         SyncLogger.log("LOCAL_FILE", "خواندن فایل بک‌آپ محلی از URI: $uri")
         val payloadText = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
@@ -175,7 +228,7 @@ object BackupSyncManager {
                 SyncLogger.log("LOCAL_FILE", "خطا: عدم امکان خواندن فایل از URI")
                 throw IllegalStateException("امکان خواندن فایل انتخاب‌شده وجود ندارد")
             }
-        restoreFromEncryptedPayload(context, payloadText, password, totpVerifier)
+        restoreFromEncryptedPayload(context, payloadText, password, totpCode)
     }
 
     /**

@@ -396,15 +396,11 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     context = getApplication(),
                     uri = uri,
                     password = effectivePassword,
-                    totpVerifier = {
-                        if (!totpCode.isNullOrBlank()) {
-                            if (totpCode == "VERIFIED") true else verifyTotpCode(totpCode)
-                        } else {
-                            false
-                        }
-                    }
+                    totpCode = totpCode
                 )
             }.onSuccess { (cardsCount, docsCount) ->
+                _totpSecret.value = safeGetEncryptedString("totp_secret", "")
+                _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
                 _syncState.value = SyncUiState.Success("بازیابی اطلاعات با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "کلمه عبور اشتباه است یا فایل انتخاب‌شده معتبر نیست")
@@ -455,15 +451,11 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     context = getApplication(),
                     encryptedBase64 = payload,
                     password = effectivePassword,
-                    totpVerifier = {
-                        if (!totpCode.isNullOrBlank()) {
-                            if (totpCode == "VERIFIED") true else verifyTotpCode(totpCode)
-                        } else {
-                            false
-                        }
-                    }
+                    totpCode = totpCode
                 )
             }.onSuccess { (cardsCount, docsCount) ->
+                _totpSecret.value = safeGetEncryptedString("totp_secret", "")
+                _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
                 _syncState.value = SyncUiState.Success("بازیابی از سرور WebDAV با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "خطا در دریافت فایل از WebDAV")
