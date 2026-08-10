@@ -573,31 +573,42 @@ fun SyncBackupScreen(
                     onClick = {
                         showPasswordDialog = false
                         val effectivePwd = passwordInput.ifBlank { masterPassword }
-                        if (activeAction == ActionType.RESTORE && isTotpEnabled) {
+                        if (activeAction == ActionType.RESTORE) {
                             pendingRestorePassword = effectivePwd
                             pendingRestoreTarget = activeTarget
-                            showTotpVerifyDialog = true
+                            viewModel.checkBackupTotpRequirement(
+                                target = activeTarget,
+                                uri = pendingRestoreUri,
+                                password = effectivePwd
+                            ) { totpRequired, hasTotpSecret ->
+                                if (totpRequired && hasTotpSecret) {
+                                    showTotpVerifyDialog = true
+                                } else {
+                                    when (activeTarget) {
+                                        BackupTarget.WEBDAV -> {
+                                            viewModel.restoreFromWebDav(effectivePwd)
+                                        }
+                                        BackupTarget.LOCAL_FILE -> {
+                                            pendingRestoreUri?.let { uri ->
+                                                viewModel.restoreLocalBackupFromUri(uri, effectivePwd)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         } else {
                             when (activeTarget) {
                                 BackupTarget.WEBDAV -> {
-                                    if (activeAction == ActionType.BACKUP) {
-                                        viewModel.backupToWebDav(effectivePwd)
-                                    } else {
-                                        viewModel.restoreFromWebDav(effectivePwd)
-                                    }
+                                    viewModel.backupToWebDav(effectivePwd)
                                 }
                                 BackupTarget.LOCAL_FILE -> {
                                     pendingRestoreUri?.let { uri ->
-                                        if (activeAction == ActionType.BACKUP) {
-                                            viewModel.createLocalBackupToUri(
-                                                uri = uri,
-                                                password = effectivePwd,
-                                                onSuccess = { Toast.makeText(context, "فایل پشتیبان با موفقیت ذخیره شد", Toast.LENGTH_LONG).show() },
-                                                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
-                                            )
-                                        } else {
-                                            viewModel.restoreLocalBackupFromUri(uri, effectivePwd)
-                                        }
+                                        viewModel.createLocalBackupToUri(
+                                            uri = uri,
+                                            password = effectivePwd,
+                                            onSuccess = { Toast.makeText(context, "فایل پشتیبان با موفقیت ذخیره شد", Toast.LENGTH_LONG).show() },
+                                            onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
+                                        )
                                     }
                                 }
                             }

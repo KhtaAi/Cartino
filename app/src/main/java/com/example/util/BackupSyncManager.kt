@@ -140,6 +140,45 @@ object BackupSyncManager {
     }
 
     /**
+     * Inspects backup payload metadata (totpRequired, hasTotpSecret) using user password.
+     */
+    suspend fun inspectBackupMetadata(
+        encryptedBase64: String,
+        password: String
+    ): Pair<Boolean, Boolean> = withContext(Dispatchers.IO) {
+        val decryptedJson = try {
+            SecurityManager.decryptData(encryptedBase64, password.toCharArray())
+        } catch (e: Exception) {
+            SyncLogger.log("RESTORE", "خطا در رمزگشایی: کلمه عبور اشتباه است یا ساختار فایل آسیب دیده. (${e.message})")
+            throw e
+        }
+
+        val adapter = moshi.adapter(BackupPayload::class.java)
+        val payload = adapter.fromJson(decryptedJson) ?: run {
+            SyncLogger.log("RESTORE", "خطا: ساختار JSON بسته بازیابی معتبر نیست")
+            throw IllegalArgumentException("فرمت محتوای بک‌آپ خوانا نیست")
+        }
+
+        Pair(payload.totpRequired, payload.totpSecret.isNotBlank())
+    }
+
+    /**
+     * Inspects backup file metadata directly from a SAF Uri.
+     */
+    suspend fun inspectBackupMetadataFromUri(
+        context: Context,
+        uri: Uri,
+        password: String
+    ): Pair<Boolean, Boolean> = withContext(Dispatchers.IO) {
+        val payloadText = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+            ?: run {
+                SyncLogger.log("LOCAL_FILE", "خطا: عدم امکان خواندن فایل از URI")
+                throw IllegalStateException("امکان خواندن فایل انتخاب‌شده وجود ندارد")
+            }
+        inspectBackupMetadata(payloadText, password)
+    }
+
+    /**
      * Restores records into Room DB from an encrypted backup payload.
      */
     suspend fun restoreFromEncryptedPayload(

@@ -355,6 +355,44 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun checkBackupTotpRequirement(
+        target: com.example.ui.screens.BackupTarget,
+        uri: Uri?,
+        password: String,
+        onResult: (totpRequired: Boolean, hasTotpSecret: Boolean) -> Unit
+    ) {
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            val effectivePassword = password.ifBlank { _masterEncryptionPassword.value }
+            if (effectivePassword.isBlank()) {
+                _syncState.value = SyncUiState.Error("لطفا کلمه عبور رمزنگاری را وارد کنید یا در تنظیمات ثبت کنید")
+                return@launch
+            }
+            runCatching {
+                when (target) {
+                    com.example.ui.screens.BackupTarget.LOCAL_FILE -> {
+                        if (uri == null) throw IllegalArgumentException("فایل انتخاب‌نشده است")
+                        BackupSyncManager.inspectBackupMetadataFromUri(getApplication(), uri, effectivePassword)
+                    }
+                    com.example.ui.screens.BackupTarget.WEBDAV -> {
+                        val config = _webDavConfig.value
+                        if (config.serverUrl.isBlank() || config.username.isBlank() || config.password.isBlank()) {
+                            throw IllegalArgumentException("اطلاعات سرور، نام کاربری و کلمه عبور WebDAV کامل نیست")
+                        }
+                        val payload = BackupSyncManager.downloadFromWebDav(config)
+                        BackupSyncManager.inspectBackupMetadata(payload, effectivePassword)
+                    }
+                }
+            }.onSuccess { (totpRequired, hasTotpSecret) ->
+                _syncState.value = SyncUiState.Idle
+                onResult(totpRequired, hasTotpSecret)
+            }.onFailure { err ->
+                val errorMsg = err.localizedMessage ?: "کلمه عبور اشتباه است یا فایل انتخاب‌شده معتبر نیست"
+                _syncState.value = SyncUiState.Error(errorMsg)
+            }
+        }
+    }
+
     fun updateMasterEncryptionPassword(password: String) {
         val trimmed = password.take(70)
         _masterEncryptionPassword.value = trimmed
