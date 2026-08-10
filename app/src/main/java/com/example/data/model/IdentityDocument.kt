@@ -43,12 +43,16 @@ data class IdentityDocument(
 ) {
     fun encrypted(): IdentityDocument = copy(
         nationalCode = SecurityManager.encryptField(nationalCode),
-        documentNumber = SecurityManager.encryptField(documentNumber)
+        documentNumber = SecurityManager.encryptField(documentNumber),
+        notes = SecurityManager.encryptField(notes),
+        customFieldsJson = SecurityManager.encryptField(customFieldsJson)
     )
 
     fun decrypted(): IdentityDocument = copy(
         nationalCode = SecurityManager.decryptField(nationalCode),
-        documentNumber = SecurityManager.decryptField(documentNumber)
+        documentNumber = SecurityManager.decryptField(documentNumber),
+        notes = SecurityManager.decryptField(notes),
+        customFieldsJson = SecurityManager.decryptField(customFieldsJson)
     )
 
     fun getCustomFields(): List<CustomDocField> {

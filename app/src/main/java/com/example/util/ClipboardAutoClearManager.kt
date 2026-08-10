@@ -16,7 +16,7 @@ object ClipboardAutoClearManager {
     fun onCopied(context: Context, copiedText: String) {
         val prefs = context.applicationContext.getSharedPreferences("cartino_prefs", Context.MODE_PRIVATE)
         val enabled = prefs.getBoolean("clipboard_auto_clear_enabled", true)
-        val seconds = prefs.getInt("clipboard_auto_clear_seconds", 30)
+        val seconds = prefs.getInt("clipboard_auto_clear_seconds", 15)
         job?.cancel()
         if (!enabled || seconds <= 0 || copiedText.isBlank()) return
         job = scope.launch {

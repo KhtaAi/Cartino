@@ -104,7 +104,8 @@ object BackupSyncManager {
                 .putString("totp_enabled", "true")
                 .apply()
         } catch (e: Throwable) {
-            SyncLogger.log("RESTORE", "خطا در ذخیره‌سازی TOTP Secret: ${e.message}")
+            SyncLogger.log("RESTORE", "خطا در ذخیره‌سازی امن TOTP Secret: ${e.message}")
+            throw IllegalStateException("امکان ذخیره‌سازی امن TOTP Secret در سیستم رمزنگاری دستگاه وجود ندارد: ${e.localizedMessage}", e)
         }
     }
 
@@ -270,6 +271,31 @@ object BackupSyncManager {
         restoreFromEncryptedPayload(context, payloadText, password, totpCode)
     }
 
+    private fun extractHost(url: String): String {
+        val clean = url.trim()
+        if (clean.isBlank()) return ""
+        return runCatching {
+            val uri = java.net.URI(if (clean.contains("://")) clean else "http://$clean")
+            uri.host ?: clean
+        }.getOrDefault(clean)
+    }
+
+    private fun maskUsername(username: String): String {
+        val clean = username.trim()
+        return if (clean.length >= 2) {
+            clean.take(2) + "***"
+        } else {
+            "***"
+        }
+    }
+
+    private fun extractFileName(remotePath: String): String {
+        val clean = remotePath.trim().removePrefix("/")
+        val lastSlash = clean.lastIndexOf('/')
+        val name = if (lastSlash >= 0) clean.substring(lastSlash + 1) else clean
+        return if (name.isBlank()) "cartino_backup.enc" else if (name.endsWith(".enc", ignoreCase = true)) name else "$name.enc"
+    }
+
     /**
      * Uploads backup file to WebDAV server (e.g. Koofr, Nextcloud, personal server).
      */
@@ -279,9 +305,13 @@ object BackupSyncManager {
         val passwordClean = config.password.trim()
         val remotePathClean = config.remotePath.trim().removePrefix("/")
 
+        val serverHost = extractHost(serverUrlClean)
+        val maskedUser = maskUsername(usernameClean)
+        val fileNameOnly = extractFileName(remotePathClean)
+
         SyncLogger.log("WEBDAV_PUT", "شروع فرایند آپلود WebDAV...")
-        SyncLogger.log("WEBDAV_PUT", "آدرس سرور: '$serverUrlClean'")
-        SyncLogger.log("WEBDAV_PUT", "نام کاربری: '$usernameClean'")
+        SyncLogger.log("WEBDAV_PUT", "آدرس سرور: '$serverHost'")
+        SyncLogger.log("WEBDAV_PUT", "نام کاربری: '$maskedUser'")
         SyncLogger.log("WEBDAV_PUT", "طول کلید/رمزعبور: ${passwordClean.length} کاراکتر")
 
         if (serverUrlClean.isBlank() || usernameClean.isBlank() || passwordClean.isBlank()) {
@@ -293,7 +323,7 @@ object BackupSyncManager {
         val fileName = if (remotePathClean.isBlank()) "cartino_backup.enc" else if (remotePathClean.endsWith(".enc", ignoreCase = true)) remotePathClean else "$remotePathClean.enc"
         val targetUrl = "$baseUrl$fileName"
 
-        SyncLogger.log("WEBDAV_PUT", "مسیر نهایی آدرس آپلود: $targetUrl")
+        SyncLogger.log("WEBDAV_PUT", "فایل مقصد آپلود: $fileNameOnly")
 
         val credential = Credentials.basic(usernameClean, passwordClean, Charsets.UTF_8)
         val requestBody = encryptedPayload.toRequestBody("text/plain; charset=utf-8".toMediaType())
@@ -350,9 +380,13 @@ object BackupSyncManager {
         val passwordClean = config.password.trim()
         val remotePathClean = config.remotePath.trim().removePrefix("/")
 
+        val serverHost = extractHost(serverUrlClean)
+        val maskedUser = maskUsername(usernameClean)
+        val fileNameOnly = extractFileName(remotePathClean)
+
         SyncLogger.log("WEBDAV_GET", "شروع فرایند دریافت از سرور WebDAV...")
-        SyncLogger.log("WEBDAV_GET", "آدرس سرور: '$serverUrlClean'")
-        SyncLogger.log("WEBDAV_GET", "نام کاربری: '$usernameClean'")
+        SyncLogger.log("WEBDAV_GET", "آدرس سرور: '$serverHost'")
+        SyncLogger.log("WEBDAV_GET", "نام کاربری: '$maskedUser'")
 
         if (serverUrlClean.isBlank() || usernameClean.isBlank() || passwordClean.isBlank()) {
             SyncLogger.log("WEBDAV_GET", "خطا: مشخصات اتصال کامل نیست")
@@ -363,7 +397,7 @@ object BackupSyncManager {
         val fileName = if (remotePathClean.isBlank()) "cartino_backup.enc" else if (remotePathClean.endsWith(".enc", ignoreCase = true)) remotePathClean else "$remotePathClean.enc"
         val targetUrl = "$baseUrl$fileName"
 
-        SyncLogger.log("WEBDAV_GET", "مسیر دریافت فایل: $targetUrl")
+        SyncLogger.log("WEBDAV_GET", "فایل مقصد دریافت: $fileNameOnly")
 
         val credential = Credentials.basic(usernameClean, passwordClean, Charsets.UTF_8)
 
@@ -389,8 +423,8 @@ object BackupSyncManager {
                         throw IllegalStateException("خطای احراز هویت WebDAV (کد 401): نام کاربری یا App Token اشتباه است.")
                     }
                     404 -> {
-                        SyncLogger.log("WEBDAV_GET", "خطای 404 Not Found: فایل '$fileName' در سرور یافت نشد.")
-                        throw IllegalStateException("فایل بک‌آپ با نام $fileName در سرور WebDAV یافت نشد (کد: 404)")
+                        SyncLogger.log("WEBDAV_GET", "خطای 404 Not Found: فایل '$fileNameOnly' در سرور یافت نشد.")
+                        throw IllegalStateException("فایل بک‌آپ با نام $fileNameOnly در سرور WebDAV یافت نشد (کد: 404)")
                     }
                     else -> {
                         SyncLogger.log("WEBDAV_GET", "خطا در دریافت فایل از سرور (کد $code)")

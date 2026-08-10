@@ -731,6 +731,10 @@ After completing the work, the agent must output a summary containing:
   Vazirmatn, zero binaries in git). Direct `.ttf` commits caused a launch
   crash and are classified as a security-adjacent defect.
 
+### 15.6 Sensitive Fields and Fail-Loud Encryption
+- هر فیلد یا داده‌ای که برچسب یا نام آن حاوی کلمات مرتبط با کلمه عبور (مانند password، pass، secret، pin، token، cvv، otp، رمز، پسورد) باشد، الزماً باید به صورت رمزنگاری‌شده در دیتابیس ذخیره شود.
+- هرگونه شکست در رمزنگاری یا عدم دسترسی به کلیدهای امنیتی دستگاه (Android KeyStore) باید منجر به توقف عملیات و نمایش خطای واضح (Fail-Loud) گردد و بازگشت بی‌صدا به متن ساده اکیداً ممنوع است.
+
 ---
 
 ## 16. Verified State Record (living, per-repository)
@@ -762,6 +766,9 @@ ANY repository with zero edits:
 - Last verified OTA update test: v0.1.2 -> v1.0.0, 2026-08-07
 - Key rotation history: (none — fresh public launch; no legacy committed key)
 - قابلیت Passkey/FIDO2 در تاریخ 2026-08-10 به تصمیم نگهدارنده به دلیل پیچیدگی پیادهسازی بدون سرور اختصاصی، بهطور کامل حذف شد.
+- گزینه A امنیت (رمزنگاری تمام فیلدهای حساس دیتابیس، حذف بازگشت بی‌صدا به متن ساده، و مهاجرت خودکار داده‌های قدیمی) در تاریخ 2026-08-10 پیاده‌سازی شد.
+- سخت‌سازی کنترل دسترسی (محدودسازی بیومتریک به BIOMETRIC_STRONG فقط، قفل مجدد خودکار پس از ۶۰ ثانیه پس‌زمینه، و مخفی‌سازی کلمه عبور همگام‌سازی تا احراز هویت بیومتریک) در تاریخ 2026-08-10 پیاده‌سازی شد.
+- سخت‌سازی سیاست کلمه عبور (حداقل ۸ کاراکتر، بنر هشدار رمز ضعیف، تاییدیه غیرفعالسازی پاکسازی کلیپ‌بورد، پیش‌فرض ۱۵ ثانیه‌ای کلیپ‌بورد، و ماسک‌سازی نام کاربری و آدرس در لاگ‌های WebDAV) در تاریخ 2026-08-10 پیاده‌سازی شد.
 ```
 
 ---

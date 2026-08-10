@@ -567,6 +567,13 @@ fun DocumentFieldItem(
     }
 }
 
+private fun isSensitiveLabel(label: String): Boolean {
+    if (label.isBlank()) return false
+    val lower = label.lowercase()
+    val sensitiveKeywords = listOf("password", "pass", "secret", "pin", "token", "cvv", "otp", "رمز", "پسورد")
+    return sensitiveKeywords.any { lower.contains(it) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CustomDocFieldEditorContent(
@@ -627,7 +634,11 @@ private fun CustomDocFieldEditorContent(
 
             OutlinedTextField(
                 value = field.label,
-                onValueChange = { newLabel -> onUpdate(field.copy(label = newLabel)) },
+                onValueChange = { newLabel ->
+                    val shouldHide = isSensitiveLabel(newLabel)
+                    val updatedHidden = if (shouldHide) true else field.isHidden
+                    onUpdate(field.copy(label = newLabel, isHidden = updatedHidden))
+                },
                 label = { Text("نام فیلد (مثال: نام پدر / گروه خونی)") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()

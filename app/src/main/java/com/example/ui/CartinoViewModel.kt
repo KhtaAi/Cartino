@@ -26,6 +26,8 @@ import kotlinx.coroutines.launch
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
+import kotlinx.coroutines.flow.first
+
 sealed class SyncUiState {
     object Idle : SyncUiState()
     object Loading : SyncUiState()
@@ -41,7 +43,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     private val plainPrefs = application.getSharedPreferences("cartino_prefs", android.content.Context.MODE_PRIVATE)
 
-    private val encryptedPrefs: android.content.SharedPreferences by lazy {
+    private val encryptedPrefs: android.content.SharedPreferences? by lazy {
         try {
             val masterKey = MasterKey.Builder(application)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -54,34 +56,29 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
         } catch (e: Throwable) {
-            try {
-                application.deleteSharedPreferences("cartino_encrypted_prefs")
-                plainPrefs
-            } catch (t: Throwable) {
-                plainPrefs
-            }
+            SyncLogger.log("SECURITY", "EncryptedSharedPreferences در دسترس نیست: ${e.message}")
+            null
         }
     }
 
     private fun safeGetEncryptedString(key: String, defaultValue: String): String {
+        val prefs = encryptedPrefs ?: return defaultValue
         return try {
-            encryptedPrefs.getString(key, defaultValue) ?: defaultValue
+            prefs.getString(key, defaultValue) ?: defaultValue
         } catch (t: Throwable) {
-            try {
-                plainPrefs.getString(key, defaultValue) ?: defaultValue
-            } catch (e: Throwable) {
-                defaultValue
-            }
+            defaultValue
         }
     }
 
     private fun safePutEncryptedString(key: String, value: String) {
+        val prefs = encryptedPrefs ?: run {
+            _syncState.value = SyncUiState.Error("سیستم رمزنگاری امن دستگاه در دسترس نیست و امکان ذخیره‌سازی اطلاعات محرمانه وجود ندارد")
+            return
+        }
         try {
-            encryptedPrefs.edit().putString(key, value).apply()
+            prefs.edit().putString(key, value).apply()
         } catch (t: Throwable) {
-            try {
-                plainPrefs.edit().putString(key, value).apply()
-            } catch (e: Throwable) {}
+            _syncState.value = SyncUiState.Error("خطا در ذخیره‌سازی امن: ${t.localizedMessage}")
         }
     }
 
@@ -257,6 +254,39 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
             try { plainPrefs.edit().remove("webdav_password").apply() } catch (e: Throwable) {}
             _webDavConfig.value = _webDavConfig.value.copy(password = oldWebdavPass)
         }
+
+        performFieldEncryptionMigrationIfNeeded()
+    }
+
+    private fun performFieldEncryptionMigrationIfNeeded() {
+        val isMigrated = plainPrefs.getBoolean("field_encryption_migrated", false)
+        if (!isMigrated) {
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                SyncLogger.log("MIGRATION", "شروع مهاجرت یک‌باره رمزنگاری فیلدها...")
+                try {
+                    val cards = cardDao.getAllCards().first()
+                    var cardsCount = 0
+                    cards.forEach { card ->
+                        val reEncrypted = card.encrypted()
+                        cardDao.insertCard(reEncrypted)
+                        cardsCount++
+                    }
+
+                    val docs = docDao.getAllDocuments().first()
+                    var docsCount = 0
+                    docs.forEach { doc ->
+                        val reEncrypted = doc.encrypted()
+                        docDao.insertDocument(reEncrypted)
+                        docsCount++
+                    }
+
+                    plainPrefs.edit().putBoolean("field_encryption_migrated", true).apply()
+                    SyncLogger.log("MIGRATION", "مهاجرت رمزنگاری فیلدها با موفقیت انجام شد ($cardsCount کارت و $docsCount مدرک).")
+                } catch (e: Throwable) {
+                    SyncLogger.log("MIGRATION", "خطا در مهاجرت رمزنگاری فیلدها: ${e.message}. در اجرای بعدی مجددا تلاش خواهد شد.")
+                }
+            }
+        }
     }
 
     private val _appThemeMode = MutableStateFlow(plainPrefs.getString("app_theme_mode", "DARK") ?: "DARK")
@@ -271,7 +301,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     val clipboardAutoClearEnabled: StateFlow<Boolean> = _clipboardAutoClearEnabled.asStateFlow()
 
     private val _clipboardAutoClearSeconds = MutableStateFlow(
-        plainPrefs.getInt("clipboard_auto_clear_seconds", 30)
+        plainPrefs.getInt("clipboard_auto_clear_seconds", 15)
     )
     val clipboardAutoClearSeconds: StateFlow<Int> = _clipboardAutoClearSeconds.asStateFlow()
 
@@ -321,12 +351,21 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         safePutEncryptedString("webdav_username", updated.username)
         safePutEncryptedString("webdav_password", updated.password)
         safePutEncryptedString("webdav_remote_path", updated.remotePath)
-        SyncLogger.log("WEBDAV", "تنظیمات WebDAV ذخیره شد (${updated.serverUrl})")
+        val host = runCatching {
+            val clean = updated.serverUrl.trim()
+            val uri = java.net.URI(if (clean.contains("://")) clean else "http://$clean")
+            uri.host ?: clean
+        }.getOrDefault(updated.serverUrl)
+        SyncLogger.log("WEBDAV", "تنظیمات WebDAV ذخیره شد ($host)")
     }
 
     fun addOrUpdateCard(card: BankCard) {
         viewModelScope.launch {
-            cardDao.insertCard(card.encrypted())
+            try {
+                cardDao.insertCard(card.encrypted())
+            } catch (e: Throwable) {
+                _syncState.value = SyncUiState.Error("خطا در رمزنگاری و ذخیره‌سازی کارت: ${e.localizedMessage}")
+            }
         }
     }
 
@@ -338,14 +377,22 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleFavoriteCard(card: BankCard) {
         viewModelScope.launch {
-            val newFav = !card.isFavorite
-            cardDao.updateCard(card.copy(isFavorite = newFav).encrypted())
+            try {
+                val newFav = !card.isFavorite
+                cardDao.updateCard(card.copy(isFavorite = newFav).encrypted())
+            } catch (e: Throwable) {
+                _syncState.value = SyncUiState.Error("خطا در رمزنگاری کارت: ${e.localizedMessage}")
+            }
         }
     }
 
     fun addOrUpdateDocument(doc: IdentityDocument) {
         viewModelScope.launch {
-            docDao.insertDocument(doc.encrypted())
+            try {
+                docDao.insertDocument(doc.encrypted())
+            } catch (e: Throwable) {
+                _syncState.value = SyncUiState.Error("خطا در رمزنگاری و ذخیره‌سازی مدرک: ${e.localizedMessage}")
+            }
         }
     }
 

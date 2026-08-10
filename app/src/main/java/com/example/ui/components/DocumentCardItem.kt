@@ -92,7 +92,7 @@ fun DocumentCardItem(
 
         val prefs = context.applicationContext.getSharedPreferences("cartino_prefs", Context.MODE_PRIVATE)
         val enabled = prefs.getBoolean("clipboard_auto_clear_enabled", true)
-        val seconds = prefs.getInt("clipboard_auto_clear_seconds", 30)
+        val seconds = prefs.getInt("clipboard_auto_clear_seconds", 15)
 
         val finalToast = if (enabled) {
             "کپی شد — پاکسازی خودکار پس از $seconds ثانیه"

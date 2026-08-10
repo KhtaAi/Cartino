@@ -43,6 +43,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -55,6 +56,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -165,6 +169,42 @@ fun MainScreen(
             }
         } else {
             isUnlocked = true
+        }
+    }
+
+    // Auto Re-lock after 60+ seconds in background if biometric is enabled
+    var backgroundTimeMs by remember { mutableStateOf(0L) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner, isBiometricEnabled) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                backgroundTimeMs = System.currentTimeMillis()
+            } else if (event == Lifecycle.Event.ON_START) {
+                if (backgroundTimeMs != 0L) {
+                    val elapsedSeconds = (System.currentTimeMillis() - backgroundTimeMs) / 1000
+                    backgroundTimeMs = 0L
+                    if (isBiometricEnabled && elapsedSeconds >= 60) {
+                        isUnlocked = false
+                        val activity = context.findActivity()
+                        if (activity != null && SecurityManager.isBiometricAvailable(context)) {
+                            SecurityManager.authenticateBiometric(
+                                activity = activity,
+                                onSuccess = { isUnlocked = true },
+                                onError = { err ->
+                                    Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                        } else {
+                            isUnlocked = true
+                        }
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 

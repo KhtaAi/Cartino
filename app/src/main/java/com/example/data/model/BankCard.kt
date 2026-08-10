@@ -34,13 +34,21 @@ data class BankCard(
     fun encrypted(): BankCard = copy(
         cardNumber = SecurityManager.encryptField(cardNumber),
         cvv2 = SecurityManager.encryptField(cvv2),
-        iban = SecurityManager.encryptField(iban)
+        iban = SecurityManager.encryptField(iban),
+        cardHolderName = SecurityManager.encryptField(cardHolderName),
+        accountNumber = SecurityManager.encryptField(accountNumber),
+        notes = SecurityManager.encryptField(notes),
+        customFieldsJson = SecurityManager.encryptField(customFieldsJson)
     )
 
     fun decrypted(): BankCard = copy(
         cardNumber = SecurityManager.decryptField(cardNumber),
         cvv2 = SecurityManager.decryptField(cvv2),
-        iban = SecurityManager.decryptField(iban)
+        iban = SecurityManager.decryptField(iban),
+        cardHolderName = SecurityManager.decryptField(cardHolderName),
+        accountNumber = SecurityManager.decryptField(accountNumber),
+        notes = SecurityManager.decryptField(notes),
+        customFieldsJson = SecurityManager.decryptField(customFieldsJson)
     )
 
     fun getCustomFields(): List<CustomCardField> {

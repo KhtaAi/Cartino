@@ -614,7 +614,7 @@ fun SyncBackupScreen(
                             }
                         }
                     },
-                    enabled = passwordInput.isNotBlank() || masterPassword.isNotBlank()
+                    enabled = (passwordInput.isBlank() && masterPassword.isNotBlank()) || passwordInput.length >= 8
                 ) {
                     Text("تایید و اجرا")
                 }
@@ -638,12 +638,24 @@ fun SyncBackupScreen(
                             onValueChange = { passwordInput = it },
                             label = {
                                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                                    Text("کلمه عبور اختصاصی (حداقل ۴ کاراکتر)")
+                                    Text("کلمه عبور اختصاصی (حداقل ۸ کاراکتر)")
                                 }
                             },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
                             textStyle = TextStyle(textDirection = TextDirection.Ltr),
+                            isError = passwordInput.length in 1..7,
+                            supportingText = if (passwordInput.length in 1..7) {
+                                {
+                                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                                        Text(
+                                            text = "رمز پشتیبان باید حداقل ۸ کاراکتر باشد.",
+                                            color = MaterialTheme.colorScheme.error,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                            } else null,
                             modifier = Modifier.fillMaxWidth()
                         )
                     }

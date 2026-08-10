@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -473,7 +474,7 @@ fun SecuritySettingsScreen(
 
             // Item 3: Master Encryption Password
             Column {
-                var passwordInput by remember(masterPassword) { mutableStateOf(masterPassword) }
+                var passwordInput by remember { mutableStateOf("") }
                 var isPasswordVisible by remember { mutableStateOf(false) }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -491,6 +492,27 @@ fun SecuritySettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                if (masterPassword.length in 1..7) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "رمز فعلی شما کوتاه و ضعیف است؛ لطفاً هرچه زودتر آن را تغییر دهید.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     OutlinedTextField(
                         value = passwordInput,
@@ -500,7 +522,7 @@ fun SecuritySettingsScreen(
                             }
                         },
                         label = { Text("کلمه عبور رمزنگاری (تا ۷۰ کاراکتر)") },
-                        placeholder = { Text("کلمه عبور امن خود را وارد کنید") },
+                        placeholder = { Text("برای تغییر، رمز جدید وارد کنید") },
                         singleLine = true,
                         visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
@@ -516,9 +538,20 @@ fun SecuritySettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
+                                val helperText = when {
+                                    passwordInput.length in 1..7 -> "حداقل \u2068۸\u2069 کاراکتر الزامی است"
+                                    passwordInput.length in 8..59 -> "برای امنیت بیشتر، \u2068۶۰\u2069 تا \u2068۷۰\u2069 کاراکتر توصیه می‌شود"
+                                    passwordInput.length in 60..70 -> "طول کلمه عبور ایده‌آل و امن است"
+                                    else -> "طول توصیه شده: \u2068۶۰\u2069 تا \u2068۷۰\u2069 کاراکتر"
+                                }
+                                val helperColor = when {
+                                    passwordInput.length in 1..7 -> MaterialTheme.colorScheme.error
+                                    passwordInput.length in 60..70 -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
                                 Text(
-                                    text = if (passwordInput.length in 60..70) "طول کلمه عبور ایده‌آل و امن است" else "طول توصیه شده: \u2068۶۰\u2069 تا \u2068۷۰\u2069 کاراکتر",
-                                    color = if (passwordInput.length in 60..70) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    text = helperText,
+                                    color = helperColor,
                                     fontSize = 10.sp
                                 )
                                 Text(
@@ -532,15 +565,48 @@ fun SecuritySettingsScreen(
                     )
                 }
 
+                if (masterPassword.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            val activity = context.findActivity()
+                            if (activity != null && SecurityManager.isBiometricAvailable(context)) {
+                                SecurityManager.authenticateBiometric(
+                                    activity = activity,
+                                    title = "احراز هویت بیومتریک",
+                                    subtitle = "برای مشاهده رمز عبور همگام‌سازی اثر انگشت یا چهره خود را اسکن کنید",
+                                    onSuccess = {
+                                        passwordInput = masterPassword
+                                    },
+                                    onError = {
+                                        passwordInput = ""
+                                        Toast.makeText(context, "احراز هویت لغو شد؛ رمز نمایش داده نشد", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            } else {
+                                passwordInput = ""
+                                Toast.makeText(context, "احراز هویت لغو شد؛ رمز نمایش داده نشد", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("نمایش رمز فعلی")
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
                     onClick = {
                         viewModel.updateMasterEncryptionPassword(passwordInput)
+                        passwordInput = ""
+                        isPasswordVisible = false
                         Toast.makeText(context, "کلمه عبور همگام‌سازی با موفقیت ذخیره شد", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = passwordInput.isNotBlank()
+                    enabled = passwordInput.length >= 8
                 ) {
                     Icon(Icons.Default.Save, contentDescription = "Save Password", modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
@@ -600,6 +666,34 @@ fun SecuritySettingsScreen(
 
             // Item 5: Auto-Clear Clipboard
             Column {
+                var showDisableClipboardDialog by remember { mutableStateOf(false) }
+
+                if (showDisableClipboardDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showDisableClipboardDialog = false },
+                        title = { Text("غیرفعال‌سازی پاکسازی خودکار کلیپ‌بورد", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Text("بدون پاکسازی خودکار، داده‌های کپی‌شده (مانند CVV2 یا شماره کارت) در کلیپ‌بورد باقی می‌مانند و ممکن است توسط سایر اپ‌ها خوانده شوند.")
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    showDisableClipboardDialog = false
+                                    viewModel.setClipboardAutoClearEnabled(false)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Text("غیرفعال‌سازی")
+                            }
+                        },
+                        dismissButton = {
+                            OutlinedButton(onClick = { showDisableClipboardDialog = false }) {
+                                Text("انصراف")
+                            }
+                        }
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -629,7 +723,13 @@ fun SecuritySettingsScreen(
 
                     Switch(
                         checked = isClipboardAutoClearEnabled,
-                        onCheckedChange = { viewModel.setClipboardAutoClearEnabled(it) }
+                        onCheckedChange = { checked ->
+                            if (!checked) {
+                                showDisableClipboardDialog = true
+                            } else {
+                                viewModel.setClipboardAutoClearEnabled(true)
+                            }
+                        }
                     )
                 }
 
@@ -643,7 +743,7 @@ fun SecuritySettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    val presets = listOf(10, 30, 60, 120)
+                    val presets = listOf(5, 15, 30, 60, 120)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)

@@ -552,6 +552,13 @@ fun AddEditCardDialog(
     }
 }
 
+private fun isSensitiveLabel(label: String): Boolean {
+    if (label.isBlank()) return false
+    val lower = label.lowercase()
+    val sensitiveKeywords = listOf("password", "pass", "secret", "pin", "token", "cvv", "otp", "رمز", "پسورد")
+    return sensitiveKeywords.any { lower.contains(it) }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CardCustomFieldEditorItem(
@@ -617,7 +624,11 @@ private fun CardCustomFieldEditorItem(
 
             OutlinedTextField(
                 value = field.label,
-                onValueChange = { newLabel -> onUpdate(field.copy(label = newLabel)) },
+                onValueChange = { newLabel ->
+                    val shouldHide = isSensitiveLabel(newLabel)
+                    val updatedHidden = if (shouldHide) true else field.isHidden
+                    onUpdate(field.copy(label = newLabel, isHidden = updatedHidden))
+                },
                 label = { Text("عنوان فیلد") },
                 placeholder = { Text("مثال: رمز دوم") },
                 singleLine = true,

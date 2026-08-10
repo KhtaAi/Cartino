@@ -60,12 +60,14 @@ object SecurityManager {
     }
 
     /**
-     * Encrypts sensitive fields (cardNumber, cvv2, iban, nationalCode, documentNumber) using Android KeyStore AES-256 GCM.
+     * Encrypts sensitive fields using Android KeyStore AES-256 GCM.
+     * Throws IllegalStateException if encryption fails or KeyStore is unavailable (fail-loud).
      */
     fun encryptField(plainText: String): String {
         if (plainText.isBlank() || plainText.startsWith("ENC:")) return plainText
         return try {
-            val secretKey = getOrCreateSecretKey() ?: return plainText
+            val secretKey = getOrCreateSecretKey()
+                ?: throw IllegalStateException("کلید امنیتی Android KeyStore در دسترس نیست")
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
             val iv = cipher.iv
@@ -75,7 +77,8 @@ object SecurityManager {
             System.arraycopy(encryptedBytes, 0, combined, iv.size, encryptedBytes.size)
             "ENC:" + Base64.encodeToString(combined, Base64.NO_WRAP)
         } catch (e: Throwable) {
-            plainText
+            if (e is IllegalStateException) throw e
+            throw IllegalStateException("خطا در رمزنگاری فیلد حسّاس: ${e.localizedMessage}", e)
         }
     }
 
@@ -125,7 +128,7 @@ object SecurityManager {
      */
     fun isBiometricAvailable(context: Context): Boolean {
         val biometricManager = BiometricManager.from(context)
-        return when (biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.BIOMETRIC_WEAK)) {
+        return when (biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)) {
             BiometricManager.BIOMETRIC_SUCCESS -> true
             else -> false
         }
@@ -146,7 +149,7 @@ object SecurityManager {
             .setTitle(title)
             .setSubtitle(subtitle)
             .setNegativeButtonText("انصراف")
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.BIOMETRIC_WEAK)
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .build()
 
         val biometricPrompt = BiometricPrompt(activity, executor, object : BiometricPrompt.AuthenticationCallback() {
