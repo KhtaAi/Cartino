@@ -1,5 +1,9 @@
 # Keep data models used with Room, Moshi, and ViewModel
 -keep class com.example.data.model.** { *; }
+-keep class com.example.data.model.PasswordGroup { *; }
+-keep class com.example.data.model.PasswordEntry { *; }
+-keep class com.example.data.model.CustomPasswordField { *; }
+-keep class com.example.data.model.GeneratedPasswordHistory { *; }
 -keep class com.example.util.BackupPayload { *; }
 -keep class com.example.util.WebDavConfig { *; }
 -keep class com.example.util.CustomDocField { *; }

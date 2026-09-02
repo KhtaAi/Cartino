@@ -10,7 +10,10 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.BankCard
 import com.example.data.model.DocumentType
+import com.example.data.model.GeneratedPasswordHistory
 import com.example.data.model.IdentityDocument
+import com.example.data.model.PasswordEntry
+import com.example.data.model.PasswordGroup
 
 class DocumentTypeConverter {
     @TypeConverter
@@ -27,11 +30,36 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-@Database(entities = [BankCard::class, IdentityDocument::class], version = 4, exportSchema = false)
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `password_groups` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `parentGroupId` TEXT, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `password_entries` (`id` TEXT NOT NULL, `groupId` TEXT, `title` TEXT NOT NULL, `username` TEXT NOT NULL, `password` TEXT NOT NULL, `website` TEXT NOT NULL, `notes` TEXT NOT NULL, `customFieldsJson` TEXT NOT NULL, `isFavorite` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `generated_password_history` (`id` TEXT NOT NULL, `password` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+    }
+}
+
+@Database(
+    entities = [
+        BankCard::class,
+        IdentityDocument::class,
+        PasswordGroup::class,
+        PasswordEntry::class,
+        GeneratedPasswordHistory::class
+    ],
+    version = 5,
+    exportSchema = false
+)
 @TypeConverters(DocumentTypeConverter::class)
 abstract class CartinoDatabase : RoomDatabase() {
     abstract fun bankCardDao(): BankCardDao
     abstract fun identityDocumentDao(): IdentityDocumentDao
+    abstract fun passwordDao(): PasswordDao
 
     companion object {
         @Volatile
@@ -44,7 +72,7 @@ abstract class CartinoDatabase : RoomDatabase() {
                     CartinoDatabase::class.java,
                     "cartino_secure_db"
                 )
-                .addMigrations(MIGRATION_3_4)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
