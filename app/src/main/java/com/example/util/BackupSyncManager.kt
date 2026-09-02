@@ -5,6 +5,8 @@ import android.net.Uri
 import com.example.data.local.CartinoDatabase
 import com.example.data.model.BankCard
 import com.example.data.model.IdentityDocument
+import com.example.data.model.PasswordEntry
+import com.example.data.model.PasswordGroup
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
@@ -21,13 +23,21 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
+data class BackupRestoreResult(
+    val cardsCount: Int,
+    val docsCount: Int,
+    val passwordsCount: Int
+)
+
 data class BackupPayload(
-    val version: Int = 1,
+    val version: Int = 2,
     val totpSecret: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val totpRequired: Boolean = false,
     val cards: List<BankCard> = emptyList(),
-    val documents: List<IdentityDocument> = emptyList()
+    val documents: List<IdentityDocument> = emptyList(),
+    val passwordGroups: List<PasswordGroup> = emptyList(),
+    val passwordEntries: List<PasswordEntry> = emptyList()
 )
 
 data class WebDavConfig(
@@ -117,19 +127,24 @@ object BackupSyncManager {
         val db = CartinoDatabase.getDatabase(context)
         val cards = db.bankCardDao().getAllCards().first().map { it.decrypted() }
         val docs = db.identityDocumentDao().getAllDocuments().first().map { it.decrypted() }
+        val groups = db.passwordDao().getAllGroups().first()
+        val entries = db.passwordDao().getAllEntries().first().map { it.decrypted() }
 
         val totpActive = isTotpEnabledInPrefs(context)
         val secret = if (totpActive) getTotpSecretFromPrefs(context) else ""
         if (totpActive && secret.isNotBlank()) {
             SyncLogger.log("BACKUP", "Secret TOTP با موفقیت در فایل پشتیبان ذخیره شد")
         }
-        SyncLogger.log("BACKUP", "تعداد کارت‌ها: ${cards.size} | تعداد مدارک: ${docs.size} | TOTP: ${if (totpActive) "فعال" else "غیرفعال"}")
+        SyncLogger.log("BACKUP", "تعداد کارت‌ها: ${cards.size} | تعداد مدارک: ${docs.size} | تعداد گروه‌های پسورد: ${groups.size} | تعداد پسوردها: ${entries.size} | TOTP: ${if (totpActive) "فعال" else "غیرفعال"}")
 
         val payload = BackupPayload(
+            version = 2,
             totpSecret = secret,
             totpRequired = totpActive,
             cards = cards,
-            documents = docs
+            documents = docs,
+            passwordGroups = groups,
+            passwordEntries = entries
         )
 
         val adapter = moshi.adapter(BackupPayload::class.java)
@@ -187,7 +202,7 @@ object BackupSyncManager {
         encryptedBase64: String,
         password: String,
         totpCode: String? = null
-    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
+    ): BackupRestoreResult = withContext(Dispatchers.IO) {
         SyncLogger.log("RESTORE", "شروع رمزگشایی بسته داده‌ها...")
         val decryptedJson = try {
             SecurityManager.decryptData(encryptedBase64, password.toCharArray())
@@ -223,6 +238,7 @@ object BackupSyncManager {
 
         var addedCards = 0
         var addedDocs = 0
+        var addedPasswords = 0
 
         payload.cards.forEach { card ->
             db.bankCardDao().insertCard(card.encrypted())
@@ -234,8 +250,17 @@ object BackupSyncManager {
             addedDocs++
         }
 
-        SyncLogger.log("RESTORE", "بازیابی با موفقیت انجام شد: $addedCards کارت و $addedDocs مدرک ذخیره گردید")
-        Pair(addedCards, addedDocs)
+        payload.passwordGroups.forEach { group ->
+            db.passwordDao().insertGroup(group)
+        }
+
+        payload.passwordEntries.forEach { entry ->
+            db.passwordDao().insertEntry(entry.encrypted())
+            addedPasswords++
+        }
+
+        SyncLogger.log("RESTORE", "بازیابی با موفقیت انجام شد: $addedCards کارت، $addedDocs مدرک و $addedPasswords پسورد ذخیره گردید")
+        BackupRestoreResult(addedCards, addedDocs, addedPasswords)
     }
 
     /**
@@ -261,7 +286,7 @@ object BackupSyncManager {
         uri: Uri,
         password: String,
         totpCode: String? = null
-    ): Pair<Int, Int> = withContext(Dispatchers.IO) {
+    ): BackupRestoreResult = withContext(Dispatchers.IO) {
         SyncLogger.log("LOCAL_FILE", "خواندن فایل بک‌آپ محلی از URI: $uri")
         val payloadText = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
             ?: run {

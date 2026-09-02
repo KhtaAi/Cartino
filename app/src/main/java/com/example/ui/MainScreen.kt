@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import com.example.util.JalaliCalendarHelper
@@ -69,6 +72,7 @@ import com.example.ui.components.AddEditCardDialog
 import com.example.ui.screens.CameraOcrScreen
 import com.example.ui.screens.CardsScreen
 import com.example.ui.screens.DocumentsScreen
+import com.example.ui.screens.PasswordsScreen
 import com.example.ui.screens.SecuritySettingsScreen
 import com.example.ui.screens.SyncBackupScreen
 import com.example.ui.theme.EmeraldStatus
@@ -94,7 +98,7 @@ import androidx.activity.ComponentActivity
 enum class CartinoTab(val titleFa: String) {
     CARDS("کارت‌ها"),
     DOCUMENTS("مدارک"),
-    SCANNER("اسکنر"),
+    PASSWORDS("پسوردها"),
     SYNC("همگام‌سازی"),
     SETTINGS("تنظیمات")
 }
@@ -115,6 +119,7 @@ fun MainScreen(
     val isFlagSecureEnabled by viewModel.isFlagSecureEnabled.collectAsState()
 
     var isUnlocked by remember { mutableStateOf(!isBiometricEnabled) }
+    var isScanningCard by remember { mutableStateOf(false) }
     var showScannedDialog by remember { mutableStateOf(false) }
 
     var showNotificationExpiryDialog by remember { mutableStateOf(false) }
@@ -303,13 +308,23 @@ fun MainScreen(
                     }
                 }
             }
+        } else if (isScanningCard) {
+            CameraOcrScreen(
+                onCardScanned = { data ->
+                    viewModel.setScannedCardData(data)
+                    showScannedDialog = true
+                    isScanningCard = false
+                },
+                onBackClick = { isScanningCard = false }
+            )
         } else {
             Scaffold(
                 bottomBar = {
                     NavigationBar(
                         containerColor = com.example.ui.theme.KeePassGreenBottomNav,
                         contentColor = Color.White,
-                        tonalElevation = 8.dp
+                        tonalElevation = 8.dp,
+                        windowInsets = WindowInsets.navigationBars
                     ) {
                         val navItemColors = NavigationBarItemDefaults.colors(
                             selectedIconColor = MaterialTheme.colorScheme.primary,
@@ -334,10 +349,10 @@ fun MainScreen(
                             colors = navItemColors
                         )
                         NavigationBarItem(
-                            selected = currentTab == CartinoTab.SCANNER,
-                            onClick = { currentTab = CartinoTab.SCANNER },
-                            icon = { Icon(Icons.Default.CameraAlt, contentDescription = "Scanner") },
-                            label = { Text("اسکنر") },
+                            selected = currentTab == CartinoTab.PASSWORDS,
+                            onClick = { currentTab = CartinoTab.PASSWORDS },
+                            icon = { Icon(Icons.Default.VpnKey, contentDescription = "Passwords") },
+                            label = { Text("پسوردها") },
                             colors = navItemColors
                         )
                         NavigationBarItem(
@@ -370,7 +385,7 @@ fun MainScreen(
                             onFavoriteToggle = { viewModel.toggleFavoriteCard(it) },
                             onDeleteCard = { viewModel.deleteCard(it) },
                             onSaveCard = { viewModel.addOrUpdateCard(it) },
-                            onNavigateToScan = { currentTab = CartinoTab.SCANNER }
+                            onNavigateToScan = { isScanningCard = true }
                         )
                         CartinoTab.DOCUMENTS -> DocumentsScreen(
                             documents = documents,
@@ -379,12 +394,8 @@ fun MainScreen(
                             onDeleteDocument = { viewModel.deleteDocument(it) },
                             onSaveDocument = { viewModel.addOrUpdateDocument(it) }
                         )
-                        CartinoTab.SCANNER -> CameraOcrScreen(
-                            onCardScanned = { data ->
-                                viewModel.setScannedCardData(data)
-                                showScannedDialog = true
-                            },
-                            onBackClick = { currentTab = CartinoTab.CARDS }
+                        CartinoTab.PASSWORDS -> PasswordsScreen(
+                            viewModel = viewModel
                         )
                         CartinoTab.SYNC -> SyncBackupScreen(
                             viewModel = viewModel

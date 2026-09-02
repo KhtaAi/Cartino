@@ -9,6 +9,9 @@ import com.example.data.local.CartinoDatabase
 import com.example.data.model.BankCard
 import com.example.data.model.DocumentType
 import com.example.data.model.IdentityDocument
+import com.example.data.model.PasswordGroup
+import com.example.data.model.PasswordEntry
+import com.example.data.model.GeneratedPasswordHistory
 import com.example.util.BackupSyncManager
 import com.example.util.IranianBankHelper
 import com.example.util.ParsedCardData
@@ -20,12 +23,19 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+import androidx.room.withTransaction
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
+import com.example.util.BitwardenFolder
+import com.example.util.BitwardenFormat
+import com.example.util.BitwardenIntermediateItem
+import com.example.util.BitwardenPasswordParser
+import com.example.util.PasswordCsvParser
 import kotlinx.coroutines.flow.first
 
 sealed class SyncUiState {
@@ -40,6 +50,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     private val db = CartinoDatabase.getDatabase(application)
     private val cardDao = db.bankCardDao()
     private val docDao = db.identityDocumentDao()
+    private val passwordDao = db.passwordDao()
 
     private val plainPrefs = application.getSharedPreferences("cartino_prefs", android.content.Context.MODE_PRIVATE)
 
@@ -168,6 +179,32 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val allPasswordGroups: StateFlow<List<PasswordGroup>> = passwordDao.getAllGroups()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allPasswordEntries: StateFlow<List<PasswordEntry>> = combine(passwordDao.getAllEntries(), _searchQuery) { entries, query ->
+        val decryptedEntries = entries.map { it.decrypted() }
+        if (query.isBlank()) {
+            decryptedEntries
+        } else {
+            val q = normalizeForSearch(query)
+            decryptedEntries.filter { entry ->
+                normalizeForSearch(entry.title).contains(q) ||
+                normalizeForSearch(entry.username).contains(q) ||
+                normalizeForSearch(entry.website).contains(q) ||
+                normalizeForSearch(entry.notes).contains(q) ||
+                entry.getCustomFields().any { field ->
+                    normalizeForSearch(field.label).contains(q) ||
+                    normalizeForSearch(field.value).contains(q)
+                }
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val passwordHistory: StateFlow<List<GeneratedPasswordHistory>> = passwordDao.getAllHistory()
+        .map { list -> list.map { it.decrypted() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     private val _scannedCardData = MutableStateFlow<ParsedCardData?>(null)
     val scannedCardData: StateFlow<ParsedCardData?> = _scannedCardData.asStateFlow()
 
@@ -256,6 +293,20 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
 
         performFieldEncryptionMigrationIfNeeded()
+
+        val defaultGroupsCreated = plainPrefs.getBoolean("default_password_groups_created", false)
+        if (!defaultGroupsCreated) {
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    passwordDao.insertGroup(PasswordGroup(name = "Chrome Password", parentGroupId = null))
+                    passwordDao.insertGroup(PasswordGroup(name = "Bitwarden Password", parentGroupId = null))
+                    plainPrefs.edit().putBoolean("default_password_groups_created", true).apply()
+                    SyncLogger.log("PASSWORDS", "گروه‌های پیش‌فرض Chrome Password و Bitwarden Password ساخته شدند")
+                } catch (e: Throwable) {
+                    SyncLogger.log("PASSWORDS", "خطا در ساخت گروه‌های پیش‌فرض پسورد: ${e.message}")
+                }
+            }
+        }
     }
 
     private fun performFieldEncryptionMigrationIfNeeded() {
@@ -412,6 +463,346 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun addOrUpdateGroup(group: PasswordGroup) {
+        viewModelScope.launch {
+            passwordDao.insertGroup(group)
+        }
+    }
+
+    fun deleteGroupCascade(group: PasswordGroup) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            deleteGroupAndChildrenRecursive(group.id)
+        }
+    }
+
+    private suspend fun deleteGroupAndChildrenRecursive(groupId: String) {
+        val allGroups = passwordDao.getAllGroups().first()
+        val children = allGroups.filter { it.parentGroupId == groupId }
+        for (child in children) {
+            deleteGroupAndChildrenRecursive(child.id)
+        }
+        passwordDao.deleteEntriesByGroupId(groupId)
+        passwordDao.deleteGroupById(groupId)
+    }
+
+    fun addOrUpdatePasswordEntry(entry: PasswordEntry) {
+        viewModelScope.launch {
+            try {
+                val encrypted = entry.encrypted()
+                passwordDao.insertEntry(encrypted)
+            } catch (e: Throwable) {
+                _syncState.value = SyncUiState.Error("خطا در رمزنگاری و ذخیره‌سازی پسورد: ${e.localizedMessage}")
+                throw SecurityException("خطای امنیتی 15.6: شکست در رمزنگاری پسورد: ${e.message}", e)
+            }
+        }
+    }
+
+    fun deletePasswordEntry(entry: PasswordEntry) {
+        viewModelScope.launch {
+            passwordDao.deleteEntryById(entry.id)
+        }
+    }
+
+    fun toggleFavoritePasswordEntry(entry: PasswordEntry) {
+        viewModelScope.launch {
+            try {
+                val newFav = !entry.isFavorite
+                val updated = entry.copy(
+                    isFavorite = newFav,
+                    updatedAt = System.currentTimeMillis()
+                ).encrypted()
+                passwordDao.updateEntry(updated)
+            } catch (e: Throwable) {
+                _syncState.value = SyncUiState.Error("خطا در به‌روزرسانی پسورد: ${e.localizedMessage}")
+                throw SecurityException("خطای امنیتی 15.6: شکست در رمزنگاری پسورد: ${e.message}", e)
+            }
+        }
+    }
+
+    fun addGeneratedPasswordHistory(password: String) {
+        viewModelScope.launch {
+            try {
+                val historyItem = GeneratedPasswordHistory(password = password).encrypted()
+                passwordDao.insertHistory(historyItem)
+            } catch (e: Throwable) {
+                SyncLogger.log("PASSWORD", "خطا در ثبت تاریخچه پسورد: ${e.message}")
+            }
+        }
+    }
+
+    fun clearPasswordHistory() {
+        viewModelScope.launch {
+            passwordDao.clearAllHistory()
+        }
+    }
+
+    fun importChromePasswordsFromUri(uri: Uri) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _syncState.value = SyncUiState.Loading
+            try {
+                val groups = passwordDao.getAllGroups().first()
+                val chromeGroup = groups.firstOrNull {
+                    it.name.trim().equals("Chrome Password", ignoreCase = true) && it.parentGroupId == null
+                } ?: groups.firstOrNull {
+                    it.name.trim().equals("Chrome Password", ignoreCase = true)
+                } ?: run {
+                    _syncState.value = SyncUiState.Error("گروه پیش‌فرض «Chrome Password» یافت نشد")
+                    return@launch
+                }
+
+                val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
+                    ?: run {
+                        _syncState.value = SyncUiState.Error("امکان باز کردن فایل انتخاب‌شده وجود ندارد")
+                        return@launch
+                    }
+
+                val parseResult = inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                    PasswordCsvParser.parseChromeCsv(reader, chromeGroup.id)
+                }
+
+                if (parseResult.entries.isEmpty() && parseResult.skippedCount == 0) {
+                    _syncState.value = SyncUiState.Error("فایل CSV انتخاب‌شده خالی است یا حاوی ردیف معتبری نیست")
+                    return@launch
+                }
+
+                // Transactional insertion: Rule 15.6 Fail-Loud guarantees that if any encryption or DB error occurs,
+                // no partial data remains stored in the database.
+                db.withTransaction {
+                    for (entry in parseResult.entries) {
+                        val encrypted = entry.encrypted()
+                        passwordDao.insertEntry(encrypted)
+                    }
+                }
+
+                _syncState.value = SyncUiState.Success(
+                    "تعداد ${parseResult.entries.size} پسورد از CSV وارد شد، ${parseResult.skippedCount} ردیف نادیده گرفته شد"
+                )
+                SyncLogger.log("CHROME_CSV", "تعداد ${parseResult.entries.size} پسورد وارد شد (${parseResult.skippedCount} ردیف رد شد)")
+            } catch (e: Throwable) {
+                val msg = e.localizedMessage ?: "خطای ناشناخته در وارد کردن پسوردها"
+                _syncState.value = SyncUiState.Error("خطا در وارد کردن پسوردها: $msg")
+                SyncLogger.log("CHROME_CSV", "خطا در وارد کردن پسوردها: $msg")
+            }
+        }
+    }
+
+    fun exportChromePasswordsToUri(uri: Uri) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _syncState.value = SyncUiState.Loading
+            try {
+                val groups = passwordDao.getAllGroups().first()
+                val chromeGroup = groups.firstOrNull {
+                    it.name.trim().equals("Chrome Password", ignoreCase = true) && it.parentGroupId == null
+                } ?: groups.firstOrNull {
+                    it.name.trim().equals("Chrome Password", ignoreCase = true)
+                } ?: run {
+                    _syncState.value = SyncUiState.Error("گروه پیش‌فرض «Chrome Password» یافت نشد")
+                    return@launch
+                }
+
+                val entries = passwordDao.getEntriesByGroup(chromeGroup.id).first()
+                if (entries.isEmpty()) {
+                    _syncState.value = SyncUiState.Error("هیچ پسوردی در گروه «Chrome Password» برای خروجی وجود ندارد")
+                    return@launch
+                }
+
+                val outputStream = getApplication<Application>().contentResolver.openOutputStream(uri)
+                    ?: run {
+                        _syncState.value = SyncUiState.Error("امکان ایجاد و باز کردن فایل مقصد وجود ندارد")
+                        return@launch
+                    }
+
+                outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                    PasswordCsvParser.writeChromeCsv(writer, entries)
+                }
+
+                _syncState.value = SyncUiState.Success("تعداد ${entries.size} پسورد با موفقیت در فایل CSV ذخیره شد")
+                SyncLogger.log("CHROME_CSV", "تعداد ${entries.size} پسورد در فایل CSV خروجی گرفته شد")
+            } catch (e: Throwable) {
+                val msg = e.localizedMessage ?: "خطا در استخراج پسوردها"
+                _syncState.value = SyncUiState.Error("خطا در استخراج پسوردها: $msg")
+                SyncLogger.log("CHROME_CSV", "خطا در استخراج پسوردها: $msg")
+            }
+        }
+    }
+
+    fun importBitwardenFromUri(uri: Uri) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _syncState.value = SyncUiState.Loading
+            try {
+                val groups = passwordDao.getAllGroups().first()
+                val bitwardenGroup = groups.firstOrNull {
+                    it.name.trim().equals("Bitwarden Password", ignoreCase = true) && it.parentGroupId == null
+                } ?: groups.firstOrNull {
+                    it.name.trim().equals("Bitwarden Password", ignoreCase = true)
+                } ?: run {
+                    _syncState.value = SyncUiState.Error("گروه پیش‌فرض «Bitwarden Password» یافت نشد")
+                    return@launch
+                }
+
+                val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
+                    ?: run {
+                        _syncState.value = SyncUiState.Error("امکان باز کردن فایل انتخاب‌شده وجود ندارد")
+                        return@launch
+                    }
+
+                val parseResult = inputStream.use { stream ->
+                    BitwardenPasswordParser.parseBitwardenStream(stream)
+                }
+
+                if (parseResult.items.isEmpty() && parseResult.skippedCount == 0) {
+                    _syncState.value = SyncUiState.Error("فایل انتخاب‌شده خالی است یا حاوی ردیف معتبری نیست")
+                    return@launch
+                }
+
+                // Transactional insertion: Rule 15.6 Fail-Loud guarantees that if any encryption or DB error occurs,
+                // no partial data remains stored in the database.
+                db.withTransaction {
+                    val existingSubgroups = passwordDao.getGroupsByParentId(bitwardenGroup.id).first().toMutableList()
+
+                    for (item in parseResult.items) {
+                        val targetGroupId = if (item.folderName.isNullOrBlank()) {
+                            bitwardenGroup.id
+                        } else {
+                            val folderClean = item.folderName.trim()
+                            val existing = existingSubgroups.firstOrNull {
+                                it.name.trim().equals(folderClean, ignoreCase = true)
+                            }
+                            if (existing != null) {
+                                existing.id
+                            } else {
+                                val newGroup = PasswordGroup(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    name = folderClean,
+                                    parentGroupId = bitwardenGroup.id,
+                                    createdAt = System.currentTimeMillis()
+                                )
+                                passwordDao.insertGroup(newGroup)
+                                existingSubgroups.add(newGroup)
+                                newGroup.id
+                            }
+                        }
+
+                        val customFieldsJson = PasswordEntry.encodeCustomFields(item.customFields)
+                        val entry = PasswordEntry(
+                            id = java.util.UUID.randomUUID().toString(),
+                            groupId = targetGroupId,
+                            title = item.title,
+                            username = item.username,
+                            password = item.password,
+                            website = item.website,
+                            notes = item.notes,
+                            customFieldsJson = customFieldsJson,
+                            isFavorite = item.isFavorite,
+                            createdAt = System.currentTimeMillis(),
+                            updatedAt = System.currentTimeMillis()
+                        ).encrypted()
+
+                        passwordDao.insertEntry(entry)
+                    }
+                }
+
+                _syncState.value = SyncUiState.Success(
+                    "تعداد ${parseResult.items.size} پسورد از بیتواردن وارد شد، ${parseResult.skippedCount} ردیف نادیده گرفته شد"
+                )
+                SyncLogger.log("BITWARDEN", "تعداد ${parseResult.items.size} پسورد وارد شد (${parseResult.skippedCount} ردیف رد شد)")
+            } catch (e: Throwable) {
+                val msg = e.localizedMessage ?: "خطای ناشناخته در وارد کردن پسوردهای بیتواردن"
+                _syncState.value = SyncUiState.Error("خطا در وارد کردن پسوردهای بیتواردن: $msg")
+                SyncLogger.log("BITWARDEN", "خطا در وارد کردن پسوردهای بیتواردن: $msg")
+            }
+        }
+    }
+
+    fun exportBitwardenToUri(uri: Uri, format: BitwardenFormat) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _syncState.value = SyncUiState.Loading
+            try {
+                val groups = passwordDao.getAllGroups().first()
+                val bitwardenGroup = groups.firstOrNull {
+                    it.name.trim().equals("Bitwarden Password", ignoreCase = true) && it.parentGroupId == null
+                } ?: groups.firstOrNull {
+                    it.name.trim().equals("Bitwarden Password", ignoreCase = true)
+                } ?: run {
+                    _syncState.value = SyncUiState.Error("گروه پیش‌فرض «Bitwarden Password» یافت نشد")
+                    return@launch
+                }
+
+                val directSubgroups = passwordDao.getGroupsByParentId(bitwardenGroup.id).first()
+                val rootEntries = passwordDao.getEntriesByGroup(bitwardenGroup.id).first()
+
+                val exportItems = mutableListOf<BitwardenIntermediateItem>()
+                for (entry in rootEntries) {
+                    val dec = entry.decrypted()
+                    exportItems.add(
+                        BitwardenIntermediateItem(
+                            folderId = null,
+                            folderName = null,
+                            title = dec.title,
+                            username = dec.username,
+                            password = dec.password,
+                            website = dec.website,
+                            notes = dec.notes,
+                            isFavorite = dec.isFavorite,
+                            customFields = dec.getCustomFields()
+                        )
+                    )
+                }
+
+                for (subgroup in directSubgroups) {
+                    val subEntries = passwordDao.getEntriesByGroup(subgroup.id).first()
+                    for (entry in subEntries) {
+                        val dec = entry.decrypted()
+                        exportItems.add(
+                            BitwardenIntermediateItem(
+                                folderId = subgroup.id,
+                                folderName = subgroup.name,
+                                title = dec.title,
+                                username = dec.username,
+                                password = dec.password,
+                                website = dec.website,
+                                notes = dec.notes,
+                                isFavorite = dec.isFavorite,
+                                customFields = dec.getCustomFields()
+                            )
+                        )
+                    }
+                }
+
+                if (exportItems.isEmpty()) {
+                    _syncState.value = SyncUiState.Error("هیچ پسوردی در گروه «Bitwarden Password» برای خروجی وجود ندارد")
+                    return@launch
+                }
+
+                val outputStream = getApplication<Application>().contentResolver.openOutputStream(uri)
+                    ?: run {
+                        _syncState.value = SyncUiState.Error("امکان ایجاد و باز کردن فایل مقصد وجود ندارد")
+                        return@launch
+                    }
+
+                outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                    when (format) {
+                        BitwardenFormat.JSON -> {
+                            val folders = directSubgroups.map { BitwardenFolder(id = it.id, name = it.name) }
+                            BitwardenPasswordParser.writeBitwardenJson(writer, folders, exportItems)
+                        }
+                        BitwardenFormat.CSV -> {
+                            BitwardenPasswordParser.writeBitwardenCsv(writer, exportItems)
+                        }
+                    }
+                }
+
+                val formatLabel = if (format == BitwardenFormat.JSON) "JSON" else "CSV"
+                _syncState.value = SyncUiState.Success("تعداد ${exportItems.size} پسورد برای بیتواردن با موفقیت ذخیره شد")
+                SyncLogger.log("BITWARDEN", "تعداد ${exportItems.size} پسورد در قالب $formatLabel برای بیتواردن خروجی گرفته شد")
+            } catch (e: Throwable) {
+                val msg = e.localizedMessage ?: "خطا در استخراج پسوردهای بیتواردن"
+                _syncState.value = SyncUiState.Error("خطا در استخراج پسوردهای بیتواردن: $msg")
+                SyncLogger.log("BITWARDEN", "خطا در استخراج پسوردهای بیتواردن: $msg")
+            }
+        }
+    }
+
     fun checkBackupTotpRequirement(
         target: com.example.ui.screens.BackupTarget,
         uri: Uri?,
@@ -493,10 +884,13 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     password = effectivePassword,
                     totpCode = totpCode
                 )
-            }.onSuccess { (cardsCount, docsCount) ->
+            }.onSuccess { result ->
+                val cardsCount = result.cardsCount
+                val docsCount = result.docsCount
+                val passwordsCount = result.passwordsCount
                 _totpSecret.value = safeGetEncryptedString("totp_secret", "")
                 _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
-                _syncState.value = SyncUiState.Success("بازیابی اطلاعات با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
+                _syncState.value = SyncUiState.Success("بازیابی اطلاعات با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک، $passwordsCount پسورد)")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "کلمه عبور اشتباه است یا فایل انتخاب‌شده معتبر نیست")
             }
@@ -548,10 +942,13 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     password = effectivePassword,
                     totpCode = totpCode
                 )
-            }.onSuccess { (cardsCount, docsCount) ->
+            }.onSuccess { result ->
+                val cardsCount = result.cardsCount
+                val docsCount = result.docsCount
+                val passwordsCount = result.passwordsCount
                 _totpSecret.value = safeGetEncryptedString("totp_secret", "")
                 _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
-                _syncState.value = SyncUiState.Success("بازیابی از سرور WebDAV با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک)")
+                _syncState.value = SyncUiState.Success("بازیابی از سرور WebDAV با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک، $passwordsCount پسورد)")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "خطا در دریافت فایل از WebDAV")
             }

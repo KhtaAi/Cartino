@@ -14,6 +14,8 @@ data class CustomPasswordField(
     val isHidden: Boolean = false
 )
 
+typealias PasswordCustomField = CustomPasswordField
+
 @Entity(tableName = "password_entries")
 data class PasswordEntry(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
