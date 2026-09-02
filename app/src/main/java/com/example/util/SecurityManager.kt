@@ -26,36 +26,44 @@ object SecurityManager {
 
     private const val FIELD_KEY_ALIAS = "cartino_field_master_key"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+    @Volatile
+    private var cachedSecretKey: SecretKey? = null
 
     private fun getOrCreateSecretKey(): SecretKey? {
-        return try {
-            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-            if (keyStore.containsAlias(FIELD_KEY_ALIAS)) {
-                val entry = keyStore.getEntry(FIELD_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
-                if (entry != null) {
-                    return entry.secretKey
-                } else {
-                    keyStore.deleteEntry(FIELD_KEY_ALIAS)
+        cachedSecretKey?.let { return it }
+        return synchronized(this) {
+            cachedSecretKey?.let { return it }
+            try {
+                val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+                if (keyStore.containsAlias(FIELD_KEY_ALIAS)) {
+                    val entry = keyStore.getEntry(FIELD_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+                    if (entry != null) {
+                        cachedSecretKey = entry.secretKey
+                        return cachedSecretKey
+                    } else {
+                        keyStore.deleteEntry(FIELD_KEY_ALIAS)
+                    }
                 }
+                val keyGenerator = KeyGenerator.getInstance(
+                    KeyProperties.KEY_ALGORITHM_AES,
+                    ANDROID_KEYSTORE
+                )
+                val spec = KeyGenParameterSpec.Builder(
+                    FIELD_KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build()
+                keyGenerator.init(spec)
+                keyGenerator.generateKey()
+                val entry = keyStore.getEntry(FIELD_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
+                cachedSecretKey = entry?.secretKey
+                cachedSecretKey
+            } catch (e: Throwable) {
+                null
             }
-            val keyGenerator = KeyGenerator.getInstance(
-                KeyProperties.KEY_ALGORITHM_AES,
-                ANDROID_KEYSTORE
-            )
-            val spec = KeyGenParameterSpec.Builder(
-                FIELD_KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-            keyGenerator.init(spec)
-            keyGenerator.generateKey()
-            val entry = keyStore.getEntry(FIELD_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry
-            entry?.secretKey
-        } catch (e: Throwable) {
-            null
         }
     }
 

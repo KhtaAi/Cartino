@@ -175,7 +175,7 @@ fun SyncBackupScreen(
 
         // Status Indicator
         when (syncState) {
-            is SyncUiState.Loading -> {
+            is SyncUiState.Loading, is SyncUiState.Progress -> {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
@@ -187,7 +187,13 @@ fun SyncBackupScreen(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp))
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text("در حال پردازش عملیات همگام‌سازی...")
+                        val progressText = if (syncState is SyncUiState.Progress) {
+                            val p = syncState as SyncUiState.Progress
+                            if (p.total > 0) "${p.message} (${p.current} از ${p.total})" else p.message
+                        } else {
+                            "در حال پردازش عملیات همگام‌سازی..."
+                        }
+                        Text(progressText)
                     }
                 }
             }

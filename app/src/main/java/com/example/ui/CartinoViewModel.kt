@@ -18,14 +18,17 @@ import com.example.util.ParsedCardData
 import com.example.util.SyncLogger
 import com.example.util.TotpManager
 import com.example.util.WebDavConfig
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 import androidx.room.withTransaction
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -36,14 +39,20 @@ import com.example.util.BitwardenFormat
 import com.example.util.BitwardenIntermediateItem
 import com.example.util.BitwardenPasswordParser
 import com.example.util.PasswordCsvParser
-import kotlinx.coroutines.flow.first
 
 sealed class SyncUiState {
     object Idle : SyncUiState()
     object Loading : SyncUiState()
+    data class Progress(val current: Int, val total: Int, val message: String = "") : SyncUiState()
     data class Success(val message: String) : SyncUiState()
     data class Error(val message: String) : SyncUiState()
 }
+
+data class PasswordImportReport(
+    val addedCount: Int,
+    val updatedCount: Int,
+    val skippedCount: Int
+)
 
 class CartinoViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -183,19 +192,21 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allPasswordEntries: StateFlow<List<PasswordEntry>> = combine(passwordDao.getAllEntries(), _searchQuery) { entries, query ->
-        val decryptedEntries = entries.map { it.decrypted() }
-        if (query.isBlank()) {
-            decryptedEntries
-        } else {
-            val q = normalizeForSearch(query)
-            decryptedEntries.filter { entry ->
-                normalizeForSearch(entry.title).contains(q) ||
-                normalizeForSearch(entry.username).contains(q) ||
-                normalizeForSearch(entry.website).contains(q) ||
-                normalizeForSearch(entry.notes).contains(q) ||
-                entry.getCustomFields().any { field ->
-                    normalizeForSearch(field.label).contains(q) ||
-                    normalizeForSearch(field.value).contains(q)
+        withContext(Dispatchers.Default) {
+            val decryptedEntries = entries.map { it.decrypted() }
+            if (query.isBlank()) {
+                decryptedEntries
+            } else {
+                val q = normalizeForSearch(query)
+                decryptedEntries.filter { entry ->
+                    normalizeForSearch(entry.title).contains(q) ||
+                    normalizeForSearch(entry.username).contains(q) ||
+                    normalizeForSearch(entry.website).contains(q) ||
+                    normalizeForSearch(entry.notes).contains(q) ||
+                    entry.getCustomFields().any { field ->
+                        normalizeForSearch(field.label).contains(q) ||
+                        normalizeForSearch(field.value).contains(q)
+                    }
                 }
             }
         }
@@ -210,6 +221,13 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     private val _syncState = MutableStateFlow<SyncUiState>(SyncUiState.Idle)
     val syncState: StateFlow<SyncUiState> = _syncState.asStateFlow()
+
+    private val _lastImportReport = MutableStateFlow<PasswordImportReport?>(null)
+    val lastImportReport: StateFlow<PasswordImportReport?> = _lastImportReport.asStateFlow()
+
+    fun clearImportReport() {
+        _lastImportReport.value = null
+    }
 
     private val _isBiometricEnabled = MutableStateFlow(true)
     val isBiometricEnabled: StateFlow<Boolean> = _isBiometricEnabled.asStateFlow()
@@ -293,6 +311,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
 
         performFieldEncryptionMigrationIfNeeded()
+        performContentHashMigrationIfNeeded()
 
         val defaultGroupsCreated = plainPrefs.getBoolean("default_password_groups_created", false)
         if (!defaultGroupsCreated) {
@@ -336,6 +355,33 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 } catch (e: Throwable) {
                     SyncLogger.log("MIGRATION", "خطا در مهاجرت رمزنگاری فیلدها: ${e.message}. در اجرای بعدی مجددا تلاش خواهد شد.")
                 }
+            }
+        }
+    }
+
+    private fun performContentHashMigrationIfNeeded() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val emptyHashEntries = passwordDao.getEntriesWithEmptyHash()
+                if (emptyHashEntries.isNotEmpty()) {
+                    SyncLogger.log("MIGRATION", "شروع محاسبه contentHash برای ${emptyHashEntries.size} پسورد بدون هش...")
+                    var count = 0
+                    for (entry in emptyHashEntries) {
+                        try {
+                            val decrypted = entry.decrypted()
+                            val hash = PasswordEntry.computeHash(decrypted)
+                            if (hash.isNotBlank()) {
+                                passwordDao.updateContentHash(entry.id, hash)
+                                count++
+                            }
+                        } catch (e: Throwable) {
+                            SyncLogger.log("MIGRATION", "خطا در محاسبه هش برای ورودی ${entry.id}: ${e.message}")
+                        }
+                    }
+                    SyncLogger.log("MIGRATION", "محاسبه contentHash برای $count پسورد تکمیل شد.")
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("MIGRATION", "خطا در بررسی مهاجرت contentHash: ${e.message}")
             }
         }
     }
@@ -488,7 +534,16 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     fun addOrUpdatePasswordEntry(entry: PasswordEntry) {
         viewModelScope.launch {
             try {
-                val encrypted = entry.encrypted()
+                val computedHash = if (entry.contentHash.isBlank()) {
+                    PasswordEntry.computeHash(entry)
+                } else {
+                    entry.contentHash
+                }
+                val entryWithHash = entry.copy(
+                    contentHash = computedHash,
+                    updatedAt = System.currentTimeMillis()
+                )
+                val encrypted = entryWithHash.encrypted()
                 passwordDao.insertEntry(encrypted)
             } catch (e: Throwable) {
                 _syncState.value = SyncUiState.Error("خطا در رمزنگاری و ذخیره‌سازی پسورد: ${e.localizedMessage}")
@@ -500,6 +555,29 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     fun deletePasswordEntry(entry: PasswordEntry) {
         viewModelScope.launch {
             passwordDao.deleteEntryById(entry.id)
+        }
+    }
+
+    fun deleteAllEntriesInGroup(
+        groupId: String,
+        onSuccess: (Int) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val count = passwordDao.countEntriesByGroup(groupId)
+                if (count > 0) {
+                    passwordDao.deleteEntriesByGroupId(groupId)
+                }
+                withContext(Dispatchers.Main) {
+                    onSuccess(count)
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("PASSWORD", "خطا در حذف همه پسوردهای گروه: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در حذف پسوردها: ${e.localizedMessage}")
+                }
+            }
         }
     }
 
@@ -517,6 +595,21 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 throw SecurityException("خطای امنیتی 15.6: شکست در رمزنگاری پسورد: ${e.message}", e)
             }
         }
+    }
+
+    suspend fun getDecryptedEntryById(entryId: String): PasswordEntry? = withContext(Dispatchers.IO) {
+        try {
+            val entry = passwordDao.getEntryById(entryId) ?: return@withContext null
+            entry.decrypted()
+        } catch (e: Throwable) {
+            SyncLogger.log("SECURITY", "خطای امنیتی 15.6: شکست در رمزگشایی ورودی $entryId: ${e.message}")
+            _syncState.value = SyncUiState.Error("خطای امنیتی در رمزگشایی پسورد: ${e.localizedMessage}")
+            null
+        }
+    }
+
+    suspend fun getDecryptedPasswordEntryById(id: String): PasswordEntry? {
+        return getDecryptedEntryById(id)
     }
 
     fun addGeneratedPasswordHistory(password: String) {
@@ -565,19 +658,97 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
-                // Transactional insertion: Rule 15.6 Fail-Loud guarantees that if any encryption or DB error occurs,
-                // no partial data remains stored in the database.
-                db.withTransaction {
-                    for (entry in parseResult.entries) {
-                        val encrypted = entry.encrypted()
-                        passwordDao.insertEntry(encrypted)
+                // Load existing entries in chromeGroup
+                val existingRawEntries = passwordDao.getEntriesListByGroupId(chromeGroup.id)
+                val existingDecrypted = existingRawEntries.mapNotNull { entry ->
+                    try {
+                        val dec = entry.decrypted()
+                        val computedHash = if (entry.contentHash.isNotBlank()) entry.contentHash else PasswordEntry.computeHash(dec)
+                        dec.copy(contentHash = computedHash)
+                    } catch (e: Throwable) {
+                        null
                     }
                 }
 
-                _syncState.value = SyncUiState.Success(
-                    "تعداد ${parseResult.entries.size} پسورد از CSV وارد شد، ${parseResult.skippedCount} ردیف نادیده گرفته شد"
+                val existingHashes = existingDecrypted.map { it.contentHash }.filter { it.isNotBlank() }.toMutableSet()
+                val existingByIdentity = existingDecrypted.associateBy {
+                    Triple(it.title.trim().lowercase(), it.username.trim().lowercase(), it.website.trim().lowercase())
+                }.toMutableMap()
+
+                var addedCount = 0
+                var updatedCount = 0
+                var skippedCount = parseResult.skippedCount
+
+                val entriesToSave = mutableListOf<PasswordEntry>()
+
+                for (rawEntry in parseResult.entries) {
+                    val plain = rawEntry.decrypted()
+                    val hash = PasswordEntry.computeHash(plain)
+                    val identityKey = Triple(plain.title.trim().lowercase(), plain.username.trim().lowercase(), plain.website.trim().lowercase())
+
+                    if (existingHashes.contains(hash)) {
+                        // Exact identical content already exists
+                        skippedCount++
+                        continue
+                    }
+
+                    val existingEntry = existingByIdentity[identityKey]
+                    if (existingEntry != null) {
+                        // Same identity but different content/hash -> Update
+                        val updated = existingEntry.copy(
+                            password = plain.password,
+                            notes = plain.notes,
+                            customFieldsJson = plain.customFieldsJson,
+                            contentHash = hash,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        entriesToSave.add(updated)
+                        existingHashes.add(hash)
+                        existingByIdentity[identityKey] = updated
+                        updatedCount++
+                    } else {
+                        // Brand new entry
+                        val newEntry = plain.copy(
+                            id = java.util.UUID.randomUUID().toString(),
+                            groupId = chromeGroup.id,
+                            contentHash = hash,
+                            createdAt = System.currentTimeMillis(),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        entriesToSave.add(newEntry)
+                        existingHashes.add(hash)
+                        existingByIdentity[identityKey] = newEntry
+                        addedCount++
+                    }
+                }
+
+                val totalToProcess = entriesToSave.size
+                var processedCount = 0
+                _syncState.value = SyncUiState.Progress(0, totalToProcess.coerceAtLeast(1), "در حال ذخیره‌سازی پسوردها...")
+
+                val chunks = entriesToSave.chunked(50)
+                for (chunk in chunks) {
+                    db.withTransaction {
+                        for (item in chunk) {
+                            val encrypted = item.encrypted()
+                            passwordDao.insertEntry(encrypted)
+                        }
+                    }
+                    processedCount += chunk.size
+                    _syncState.value = SyncUiState.Progress(processedCount, totalToProcess.coerceAtLeast(1), "در حال ذخیره‌سازی پسوردها...")
+                }
+
+                val report = PasswordImportReport(
+                    addedCount = addedCount,
+                    updatedCount = updatedCount,
+                    skippedCount = skippedCount
                 )
-                SyncLogger.log("CHROME_CSV", "تعداد ${parseResult.entries.size} پسورد وارد شد (${parseResult.skippedCount} ردیف رد شد)")
+                _lastImportReport.value = report
+
+                _syncState.value = SyncUiState.Success(
+                    "واردات با موفقیت انجام شد: $addedCount جدید، $updatedCount به‌روزرسانی، $skippedCount رد شده"
+                )
+                SyncLogger.log("CHROME_CSV", "گزارش واردات Chrome: جدید=$addedCount، به‌روزرسانی=$updatedCount، ردشده=$skippedCount")
             } catch (e: Throwable) {
                 val msg = e.localizedMessage ?: "خطای ناشناخته در وارد کردن پسوردها"
                 _syncState.value = SyncUiState.Error("خطا در وارد کردن پسوردها: $msg")
@@ -606,6 +777,17 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
+                val total = entries.size
+                _syncState.value = SyncUiState.Progress(0, total, "در حال رمزگشایی و آماده‌سازی خروجی...")
+
+                val decryptedEntries = ArrayList<PasswordEntry>(total)
+                entries.forEachIndexed { index, entry ->
+                    decryptedEntries.add(entry.decrypted())
+                    if ((index + 1) % 25 == 0 || index + 1 == total) {
+                        _syncState.value = SyncUiState.Progress(index + 1, total, "در حال رمزگشایی و آماده‌سازی خروجی...")
+                    }
+                }
+
                 val outputStream = getApplication<Application>().contentResolver.openOutputStream(uri)
                     ?: run {
                         _syncState.value = SyncUiState.Error("امکان ایجاد و باز کردن فایل مقصد وجود ندارد")
@@ -613,7 +795,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     }
 
                 outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
-                    PasswordCsvParser.writeChromeCsv(writer, entries)
+                    PasswordCsvParser.writeChromeCsv(writer, decryptedEntries)
                 }
 
                 _syncState.value = SyncUiState.Success("تعداد ${entries.size} پسورد با موفقیت در فایل CSV ذخیره شد")
@@ -655,36 +837,101 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
-                // Transactional insertion: Rule 15.6 Fail-Loud guarantees that if any encryption or DB error occurs,
-                // no partial data remains stored in the database.
-                db.withTransaction {
-                    val existingSubgroups = passwordDao.getGroupsByParentId(bitwardenGroup.id).first().toMutableList()
+                // Cache subgroups map in memory to avoid repeated queries
+                val existingSubgroups = passwordDao.getGroupsByParentId(bitwardenGroup.id).first().toMutableList()
 
-                    for (item in parseResult.items) {
-                        val targetGroupId = if (item.folderName.isNullOrBlank()) {
-                            bitwardenGroup.id
-                        } else {
-                            val folderClean = item.folderName.trim()
-                            val existing = existingSubgroups.firstOrNull {
-                                it.name.trim().equals(folderClean, ignoreCase = true)
-                            }
-                            if (existing != null) {
-                                existing.id
-                            } else {
-                                val newGroup = PasswordGroup(
-                                    id = java.util.UUID.randomUUID().toString(),
-                                    name = folderClean,
-                                    parentGroupId = bitwardenGroup.id,
-                                    createdAt = System.currentTimeMillis()
-                                )
-                                passwordDao.insertGroup(newGroup)
-                                existingSubgroups.add(newGroup)
-                                newGroup.id
-                            }
+                val allBitwardenGroupIds = listOf(bitwardenGroup.id) + existingSubgroups.map { it.id }
+                val allExistingRaw = mutableListOf<PasswordEntry>()
+                for (gId in allBitwardenGroupIds) {
+                    allExistingRaw.addAll(passwordDao.getEntriesListByGroupId(gId))
+                }
+
+                val existingDecrypted = allExistingRaw.mapNotNull { entry ->
+                    try {
+                        val dec = entry.decrypted()
+                        val computedHash = if (entry.contentHash.isNotBlank()) entry.contentHash else PasswordEntry.computeHash(dec)
+                        dec.copy(contentHash = computedHash)
+                    } catch (e: Throwable) {
+                        null
+                    }
+                }
+
+                val existingHashesByGroup = mutableMapOf<String, MutableSet<String>>()
+                val existingIdentityByGroup = mutableMapOf<String, MutableMap<Triple<String, String, String>, PasswordEntry>>()
+
+                for (dec in existingDecrypted) {
+                    val gId = dec.groupId ?: bitwardenGroup.id
+                    val hashSet = existingHashesByGroup.getOrPut(gId) { mutableSetOf() }
+                    if (dec.contentHash.isNotBlank()) hashSet.add(dec.contentHash)
+                    val identityMap = existingIdentityByGroup.getOrPut(gId) { mutableMapOf() }
+                    val identityKey = Triple(dec.title.trim().lowercase(), dec.username.trim().lowercase(), dec.website.trim().lowercase())
+                    identityMap[identityKey] = dec
+                }
+
+                var addedCount = 0
+                var updatedCount = 0
+                var skippedCount = parseResult.skippedCount
+
+                val entriesToSave = mutableListOf<PasswordEntry>()
+
+                for (item in parseResult.items) {
+                    val targetGroupId = if (item.folderName.isNullOrBlank()) {
+                        bitwardenGroup.id
+                    } else {
+                        val folderClean = item.folderName.trim()
+                        val existing = existingSubgroups.firstOrNull {
+                            it.name.trim().equals(folderClean, ignoreCase = true)
                         }
+                        if (existing != null) {
+                            existing.id
+                        } else {
+                            val newGroup = PasswordGroup(
+                                id = java.util.UUID.randomUUID().toString(),
+                                name = folderClean,
+                                parentGroupId = bitwardenGroup.id,
+                                createdAt = System.currentTimeMillis()
+                            )
+                            passwordDao.insertGroup(newGroup)
+                            existingSubgroups.add(newGroup)
+                            newGroup.id
+                        }
+                    }
 
-                        val customFieldsJson = PasswordEntry.encodeCustomFields(item.customFields)
-                        val entry = PasswordEntry(
+                    val hash = PasswordEntry.computeHash(
+                        title = item.title,
+                        username = item.username,
+                        password = item.password,
+                        website = item.website,
+                        notes = item.notes,
+                        customFields = item.customFields
+                    )
+                    val identityKey = Triple(item.title.trim().lowercase(), item.username.trim().lowercase(), item.website.trim().lowercase())
+
+                    val hashSet = existingHashesByGroup.getOrPut(targetGroupId) { mutableSetOf() }
+                    val identityMap = existingIdentityByGroup.getOrPut(targetGroupId) { mutableMapOf() }
+
+                    if (hashSet.contains(hash)) {
+                        skippedCount++
+                        continue
+                    }
+
+                    val customFieldsJson = PasswordEntry.encodeCustomFields(item.customFields)
+                    val existingEntry = identityMap[identityKey]
+                    if (existingEntry != null) {
+                        val updated = existingEntry.copy(
+                            password = item.password,
+                            notes = item.notes,
+                            customFieldsJson = customFieldsJson,
+                            isFavorite = item.isFavorite,
+                            contentHash = hash,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        entriesToSave.add(updated)
+                        hashSet.add(hash)
+                        identityMap[identityKey] = updated
+                        updatedCount++
+                    } else {
+                        val newEntry = PasswordEntry(
                             id = java.util.UUID.randomUUID().toString(),
                             groupId = targetGroupId,
                             title = item.title,
@@ -694,18 +941,44 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                             notes = item.notes,
                             customFieldsJson = customFieldsJson,
                             isFavorite = item.isFavorite,
+                            contentHash = hash,
                             createdAt = System.currentTimeMillis(),
                             updatedAt = System.currentTimeMillis()
-                        ).encrypted()
-
-                        passwordDao.insertEntry(entry)
+                        )
+                        entriesToSave.add(newEntry)
+                        hashSet.add(hash)
+                        identityMap[identityKey] = newEntry
+                        addedCount++
                     }
                 }
 
-                _syncState.value = SyncUiState.Success(
-                    "تعداد ${parseResult.items.size} پسورد از بیتواردن وارد شد، ${parseResult.skippedCount} ردیف نادیده گرفته شد"
+                val totalToProcess = entriesToSave.size
+                var processedCount = 0
+                _syncState.value = SyncUiState.Progress(0, totalToProcess.coerceAtLeast(1), "در حال ذخیره‌سازی پسوردهای بیتواردن...")
+
+                val chunks = entriesToSave.chunked(50)
+                for (chunk in chunks) {
+                    db.withTransaction {
+                        for (entry in chunk) {
+                            val encrypted = entry.encrypted()
+                            passwordDao.insertEntry(encrypted)
+                        }
+                    }
+                    processedCount += chunk.size
+                    _syncState.value = SyncUiState.Progress(processedCount, totalToProcess.coerceAtLeast(1), "در حال ذخیره‌سازی پسوردهای بیتواردن...")
+                }
+
+                val report = PasswordImportReport(
+                    addedCount = addedCount,
+                    updatedCount = updatedCount,
+                    skippedCount = skippedCount
                 )
-                SyncLogger.log("BITWARDEN", "تعداد ${parseResult.items.size} پسورد وارد شد (${parseResult.skippedCount} ردیف رد شد)")
+                _lastImportReport.value = report
+
+                _syncState.value = SyncUiState.Success(
+                    "واردات با موفقیت انجام شد: $addedCount جدید، $updatedCount به‌روزرسانی، $skippedCount رد شده"
+                )
+                SyncLogger.log("BITWARDEN", "گزارش واردات Bitwarden: جدید=$addedCount، به‌روزرسانی=$updatedCount، ردشده=$skippedCount")
             } catch (e: Throwable) {
                 val msg = e.localizedMessage ?: "خطای ناشناخته در وارد کردن پسوردهای بیتواردن"
                 _syncState.value = SyncUiState.Error("خطا در وارد کردن پسوردهای بیتواردن: $msg")
@@ -731,13 +1004,34 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 val directSubgroups = passwordDao.getGroupsByParentId(bitwardenGroup.id).first()
                 val rootEntries = passwordDao.getEntriesByGroup(bitwardenGroup.id).first()
 
-                val exportItems = mutableListOf<BitwardenIntermediateItem>()
+                val allEntriesToExport = mutableListOf<Pair<PasswordGroup?, PasswordEntry>>()
                 for (entry in rootEntries) {
+                    allEntriesToExport.add(Pair(null, entry))
+                }
+                for (subgroup in directSubgroups) {
+                    val subEntries = passwordDao.getEntriesByGroup(subgroup.id).first()
+                    for (entry in subEntries) {
+                        allEntriesToExport.add(Pair(subgroup, entry))
+                    }
+                }
+
+                if (allEntriesToExport.isEmpty()) {
+                    _syncState.value = SyncUiState.Error("هیچ پسوردی در گروه «Bitwarden Password» برای خروجی وجود ندارد")
+                    return@launch
+                }
+
+                val total = allEntriesToExport.size
+                _syncState.value = SyncUiState.Progress(0, total, "در حال رمزگشایی و آماده‌سازی خروجی...")
+
+                val exportItems = mutableListOf<BitwardenIntermediateItem>()
+                allEntriesToExport.forEachIndexed { index, pair ->
+                    val subgroup = pair.first
+                    val entry = pair.second
                     val dec = entry.decrypted()
                     exportItems.add(
                         BitwardenIntermediateItem(
-                            folderId = null,
-                            folderName = null,
+                            folderId = subgroup?.id,
+                            folderName = subgroup?.name,
                             title = dec.title,
                             username = dec.username,
                             password = dec.password,
@@ -747,31 +1041,9 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                             customFields = dec.getCustomFields()
                         )
                     )
-                }
-
-                for (subgroup in directSubgroups) {
-                    val subEntries = passwordDao.getEntriesByGroup(subgroup.id).first()
-                    for (entry in subEntries) {
-                        val dec = entry.decrypted()
-                        exportItems.add(
-                            BitwardenIntermediateItem(
-                                folderId = subgroup.id,
-                                folderName = subgroup.name,
-                                title = dec.title,
-                                username = dec.username,
-                                password = dec.password,
-                                website = dec.website,
-                                notes = dec.notes,
-                                isFavorite = dec.isFavorite,
-                                customFields = dec.getCustomFields()
-                            )
-                        )
+                    if ((index + 1) % 25 == 0 || index + 1 == total) {
+                        _syncState.value = SyncUiState.Progress(index + 1, total, "در حال رمزگشایی و آماده‌سازی خروجی...")
                     }
-                }
-
-                if (exportItems.isEmpty()) {
-                    _syncState.value = SyncUiState.Error("هیچ پسوردی در گروه «Bitwarden Password» برای خروجی وجود ندارد")
-                    return@launch
                 }
 
                 val outputStream = getApplication<Application>().contentResolver.openOutputStream(uri)

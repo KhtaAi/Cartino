@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
@@ -73,7 +74,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -99,6 +102,8 @@ import com.example.ui.theme.EmeraldStatus
 import com.example.ui.theme.GoldPrimary
 import com.example.ui.theme.VazirmatnFontFamily
 import com.example.util.ClipboardAutoClearManager
+import com.example.util.SecurityManager
+import com.example.util.findActivity
 
 @Composable
 fun PasswordsScreen(
@@ -119,11 +124,16 @@ fun PasswordsScreen(
     var showAddEntryDialog by remember { mutableStateOf(false) }
     var showGeneratorDialog by remember { mutableStateOf(false) }
     var editingEntry by remember { mutableStateOf<PasswordEntry?>(null) }
+    var isEditingEntryReadOnly by remember { mutableStateOf(true) }
+    var isDecryptingEntry by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
     var groupToRename by remember { mutableStateOf<PasswordGroup?>(null) }
     var groupToDelete by remember { mutableStateOf<PasswordGroup?>(null) }
+    var groupToDeleteAllPasswords by remember { mutableStateOf<PasswordGroup?>(null) }
     var entryToDelete by remember { mutableStateOf<PasswordEntry?>(null) }
 
     val syncState by viewModel.syncState.collectAsState()
+    val lastImportReport by viewModel.lastImportReport.collectAsState()
     var showChromeMenu by remember { mutableStateOf(false) }
     var showExportWarningDialog by remember { mutableStateOf(false) }
 
@@ -294,6 +304,8 @@ fun PasswordsScreen(
                             onClick = {
                                 isFabExpanded = false
                                 editingEntry = null
+                                isEditingEntryReadOnly = false
+                                isDecryptingEntry = false
                                 showAddEntryDialog = true
                             },
                             containerColor = MaterialTheme.colorScheme.primary,
@@ -370,7 +382,7 @@ fun PasswordsScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Sync / CSV Import-Export State Banner
-            if (syncState is SyncUiState.Loading) {
+            if (syncState is SyncUiState.Loading || syncState is SyncUiState.Progress) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
@@ -384,8 +396,14 @@ fun PasswordsScreen(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         Spacer(modifier = Modifier.width(10.dp))
+                        val progressText = if (syncState is SyncUiState.Progress) {
+                            val p = syncState as SyncUiState.Progress
+                            if (p.total > 0) "${p.message} (${p.current} از ${p.total})" else p.message
+                        } else {
+                            "در حال پردازش عملیات پسوردها..."
+                        }
                         Text(
-                            "در حال پردازش عملیات پسوردها...",
+                            text = progressText,
                             style = MaterialTheme.typography.bodyMedium,
                             fontFamily = VazirmatnFontFamily
                         )
@@ -567,6 +585,30 @@ fun PasswordsScreen(
                                             )
                                         }
                                     )
+                                    if (displayedEntries.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    "حذف همه پسوردها",
+                                                    fontFamily = VazirmatnFontFamily,
+                                                    fontSize = 13.sp,
+                                                    color = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            onClick = {
+                                                showChromeMenu = false
+                                                groupToDeleteAllPasswords = currentGroup
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Default.DeleteSweep,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            modifier = Modifier.testTag("delete_all_chrome_passwords_menu_item")
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -641,6 +683,30 @@ fun PasswordsScreen(
                                             )
                                         }
                                     )
+                                    if (displayedEntries.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    "حذف همه پسوردها",
+                                                    fontFamily = VazirmatnFontFamily,
+                                                    fontSize = 13.sp,
+                                                    color = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            onClick = {
+                                                showBitwardenMenu = false
+                                                groupToDeleteAllPasswords = currentGroup
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Default.DeleteSweep,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            modifier = Modifier.testTag("delete_all_bitwarden_passwords_menu_item")
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -804,13 +870,31 @@ fun PasswordsScreen(
                             PasswordEntryItem(
                                 entry = entry,
                                 onClick = {
-                                    editingEntry = entry
+                                    isEditingEntryReadOnly = true
+                                    isDecryptingEntry = true
+                                    editingEntry = null
+                                    coroutineScope.launch {
+                                        val decrypted = viewModel.getDecryptedEntryById(entry.id)
+                                        isDecryptingEntry = false
+                                        if (decrypted != null) {
+                                            editingEntry = decrypted
+                                        }
+                                    }
                                 },
                                 onFavoriteToggle = {
                                     viewModel.toggleFavoritePasswordEntry(entry)
                                 },
                                 onEditClick = {
-                                    editingEntry = entry
+                                    isEditingEntryReadOnly = false
+                                    isDecryptingEntry = true
+                                    editingEntry = null
+                                    coroutineScope.launch {
+                                        val decrypted = viewModel.getDecryptedEntryById(entry.id)
+                                        isDecryptingEntry = false
+                                        if (decrypted != null) {
+                                            editingEntry = decrypted
+                                        }
+                                    }
                                 },
                                 onDeleteClick = {
                                     entryToDelete = entry
@@ -838,19 +922,29 @@ fun PasswordsScreen(
     }
 
     // Add / Edit Entry BottomSheet
-    if (showAddEntryDialog || editingEntry != null) {
+    if (showAddEntryDialog || editingEntry != null || isDecryptingEntry) {
         AddEditPasswordDialog(
             initialEntry = editingEntry,
+            initialIsReadOnly = isEditingEntryReadOnly,
+            isLoading = isDecryptingEntry,
             groupId = currentGroupId,
             availableGroups = allGroups,
             onDismiss = {
                 showAddEntryDialog = false
                 editingEntry = null
+                isDecryptingEntry = false
             },
             onSave = { entryToSave ->
                 viewModel.addOrUpdatePasswordEntry(entryToSave)
                 showAddEntryDialog = false
                 editingEntry = null
+                isDecryptingEntry = false
+            },
+            onDelete = { entryToDelete ->
+                viewModel.deletePasswordEntry(entryToDelete)
+                showAddEntryDialog = false
+                editingEntry = null
+                isDecryptingEntry = false
             }
         )
     }
@@ -981,6 +1075,97 @@ fun PasswordsScreen(
             dismissButton = {
                 TextButton(onClick = { groupToDelete = null }) {
                     Text("انصراف")
+                }
+            }
+        )
+    }
+
+    // Delete All Passwords Confirmation Dialog
+    groupToDeleteAllPasswords?.let { grp ->
+        val groupEntryCount = remember(grp.id, allEntries) {
+            allEntries.count { it.groupId == grp.id }
+        }
+
+        AlertDialog(
+            onDismissRequest = { groupToDeleteAllPasswords = null },
+            title = {
+                Text(
+                    text = "حذف همه پسوردها",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error,
+                    fontFamily = VazirmatnFontFamily
+                )
+            },
+            text = {
+                Text(
+                    text = "آیا از حذف تمامی $groupEntryCount پسورد موجود در گروه «${grp.name}» اطمینان دارید؟ این عملیات غیرقابل بازگشت است.",
+                    fontFamily = VazirmatnFontFamily,
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val targetGrp = grp
+                        groupToDeleteAllPasswords = null
+
+                        val executeDelete = {
+                            viewModel.deleteAllEntriesInGroup(
+                                groupId = targetGrp.id,
+                                onSuccess = { deletedCount ->
+                                    Toast.makeText(
+                                        context,
+                                        "$deletedCount پسورد با موفقیت حذف شدند",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                                onError = { errMsg ->
+                                    Toast.makeText(context, errMsg, Toast.LENGTH_SHORT).show()
+                                }
+                            )
+                        }
+
+                        val activity = context.findActivity()
+                        if (activity != null && SecurityManager.isBiometricAvailable(context)) {
+                            SecurityManager.authenticateBiometric(
+                                activity = activity,
+                                title = "تأیید حذف همه پسوردها",
+                                subtitle = "برای حذف تمامی پسوردهای گروه «${targetGrp.name}» اثر انگشت خود را تأیید کنید",
+                                onSuccess = {
+                                    executeDelete()
+                                },
+                                onError = { err ->
+                                    Toast.makeText(
+                                        context,
+                                        "تأیید هویت ناموفق: $err",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            )
+                        } else {
+                            executeDelete()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("confirm_delete_all_passwords_button")
+                ) {
+                    Text(
+                        text = "حذف همه",
+                        fontFamily = VazirmatnFontFamily,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { groupToDeleteAllPasswords = null },
+                    modifier = Modifier.testTag("cancel_delete_all_passwords_button")
+                ) {
+                    Text(
+                        text = "انصراف",
+                        fontFamily = VazirmatnFontFamily
+                    )
                 }
             }
         )
@@ -1177,6 +1362,121 @@ fun PasswordsScreen(
             dismissButton = {
                 TextButton(onClick = { showBitwardenExportDialog = false }) {
                     Text("انصراف", fontFamily = VazirmatnFontFamily)
+                }
+            }
+        )
+    }
+
+    // Import Result Summary Dialog
+    lastImportReport?.let { report ->
+        AlertDialog(
+            onDismissRequest = { viewModel.clearImportReport() },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = EmeraldStatus,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(
+                    text = "گزارش واردات پسوردها",
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = VazirmatnFontFamily,
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "فرآیند بررسی و واردات هوشمند با موفقیت به پایان رسید:",
+                        fontFamily = VazirmatnFontFamily,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "موارد جدید افزوده شده:",
+                                    fontFamily = VazirmatnFontFamily,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = "${report.addedCount}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldStatus,
+                                    fontSize = 14.sp
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "موارد به‌روزرسانی شده:",
+                                    fontFamily = VazirmatnFontFamily,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = "${report.updatedCount}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = CustomCyanBlue,
+                                    fontSize = 14.sp
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "موارد تکراری (رد شده):",
+                                    fontFamily = VazirmatnFontFamily,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = "${report.skippedCount}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 14.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.clearImportReport() },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = GoldPrimary)
+                ) {
+                    Text(
+                        "متوجه شدم",
+                        fontFamily = VazirmatnFontFamily,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
                 }
             }
         )

@@ -275,20 +275,24 @@ fun PasswordGeneratorDialog(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Medium
                             )
-                            Text(
-                                text = "${passwordLength.toInt()}",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = GoldPrimary
-                            )
+                            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                                Text(
+                                    text = "${passwordLength.toInt()}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = GoldPrimary
+                                )
+                            }
                         }
 
                         Slider(
                             value = passwordLength,
                             onValueChange = { passwordLength = it },
-                            valueRange = 8f..28f,
-                            steps = 19,
-                            modifier = Modifier.fillMaxWidth()
+                            valueRange = 8f..128f,
+                            steps = 119,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("password_length_slider")
                         )
 
                         // Toggles

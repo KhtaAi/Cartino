@@ -68,6 +68,18 @@ interface PasswordDao {
     @Query("SELECT * FROM password_entries WHERE id = :id")
     suspend fun getEntryById(id: String): PasswordEntry?
 
+    @Query("SELECT * FROM password_entries WHERE groupId = :groupId AND contentHash = :hash LIMIT 1")
+    suspend fun getEntryByHash(groupId: String, hash: String): PasswordEntry?
+
+    @Query("SELECT * FROM password_entries WHERE contentHash = '' OR contentHash IS NULL")
+    suspend fun getEntriesWithEmptyHash(): List<PasswordEntry>
+
+    @Query("UPDATE password_entries SET contentHash = :hash WHERE id = :id")
+    suspend fun updateContentHash(id: String, hash: String)
+
+    @Query("SELECT * FROM password_entries WHERE groupId = :groupId")
+    suspend fun getEntriesListByGroupId(groupId: String): List<PasswordEntry>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEntry(entry: PasswordEntry)
 
@@ -82,6 +94,9 @@ interface PasswordDao {
 
     @Query("DELETE FROM password_entries WHERE groupId = :groupId")
     suspend fun deleteEntriesByGroupId(groupId: String)
+
+    @Query("SELECT COUNT(*) FROM password_entries WHERE groupId = :groupId")
+    suspend fun countEntriesByGroup(groupId: String): Int
 
     @Query("DELETE FROM password_entries")
     suspend fun clearAllEntries()

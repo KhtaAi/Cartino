@@ -27,6 +27,7 @@ data class PasswordEntry(
     val notes: String = "",
     val customFieldsJson: String = "[]",
     val isFavorite: Boolean = false,
+    val contentHash: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
@@ -74,6 +75,49 @@ data class PasswordEntry(
     }
 
     companion object {
+        fun computeHash(
+            title: String,
+            username: String,
+            password: String,
+            website: String,
+            notes: String,
+            customFields: List<CustomPasswordField> = emptyList()
+        ): String {
+            val normTitle = title.trim()
+            val normUsername = username.trim()
+            val normPassword = password.trim()
+            val normWebsite = website.trim()
+            val normNotes = notes.trim()
+            val sortedFields = customFields
+                .filter { it.label.isNotBlank() }
+                .sortedBy { it.label.trim().lowercase() }
+                .joinToString("|") { "${it.label.trim().lowercase()}:${it.value.trim()}:${it.isHidden}" }
+
+            val rawString = listOf(
+                normTitle,
+                normUsername,
+                normPassword,
+                normWebsite,
+                normNotes,
+                sortedFields
+            ).joinToString(":::HASH_SEP:::")
+
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val hashBytes = digest.digest(rawString.toByteArray(Charsets.UTF_8))
+            return hashBytes.joinToString("") { "%02x".format(it) }
+        }
+
+        fun computeHash(entry: PasswordEntry): String {
+            return computeHash(
+                title = entry.title,
+                username = entry.username,
+                password = entry.password,
+                website = entry.website,
+                notes = entry.notes,
+                customFields = entry.getCustomFields()
+            )
+        }
+
         fun encodeCustomFields(fields: List<CustomPasswordField>): String {
             val valid = fields.filter { it.label.isNotBlank() }
             return try {
