@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VpnKey
@@ -66,6 +67,7 @@ fun PasswordEntryItem(
     modifier: Modifier = Modifier
 ) {
     var isMenuExpanded by remember { mutableStateOf(false) }
+    var showPasswordQrDialog by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier
@@ -196,6 +198,21 @@ fun PasswordEntryItem(
                     )
                 }
 
+                // Quick QR Code button
+                IconButton(
+                    onClick = { showPasswordQrDialog = true },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("qr_password_${entry.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.QrCode2,
+                        contentDescription = "کد QR پسورد",
+                        tint = GoldPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
                 Box {
                     IconButton(
                         onClick = { isMenuExpanded = true },
@@ -227,6 +244,22 @@ fun PasswordEntryItem(
                             onClick = {
                                 isMenuExpanded = false
                                 onCopyPassword()
+                            }
+                        )
+
+                        DropdownMenuItem(
+                            text = { Text("نمایش کد QR") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.QrCode2,
+                                    contentDescription = null,
+                                    tint = GoldPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            onClick = {
+                                isMenuExpanded = false
+                                showPasswordQrDialog = true
                             }
                         )
 
@@ -297,5 +330,13 @@ fun PasswordEntryItem(
                 }
             }
         }
+    }
+
+    if (showPasswordQrDialog) {
+        PasswordQrCodeDialog(
+            fieldLabel = "کلمه عبور (${entry.title})",
+            secretValue = entry.password,
+            onDismiss = { showPasswordQrDialog = false }
+        )
     }
 }

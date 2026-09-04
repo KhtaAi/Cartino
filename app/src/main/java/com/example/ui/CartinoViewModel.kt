@@ -17,13 +17,17 @@ import com.example.util.IranianBankHelper
 import com.example.util.ParsedCardData
 import com.example.util.SyncLogger
 import com.example.util.TotpManager
+import com.example.util.DomainUtils
 import com.example.util.WebDavConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -191,17 +195,61 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     val allPasswordGroups: StateFlow<List<PasswordGroup>> = passwordDao.getAllGroups()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val allPasswordEntries: StateFlow<List<PasswordEntry>> = combine(passwordDao.getAllEntries(), _searchQuery) { entries, query ->
+    private val _isLoadingPasswords = MutableStateFlow(false)
+    val isLoadingPasswords: StateFlow<Boolean> = _isLoadingPasswords.asStateFlow()
+
+    private val decryptedPasswordCache = java.util.concurrent.ConcurrentHashMap<String, PasswordEntry>()
+
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private val debouncedSearchQuery: Flow<String> = _searchQuery
+        .debounce(300L)
+        .distinctUntilChanged()
+
+    private val decryptedEntriesFlow: Flow<List<PasswordEntry>> = passwordDao.getAllEntries().map { rawList ->
         withContext(Dispatchers.Default) {
-            val decryptedEntries = entries.map { it.decrypted() }
+            val hasUncached = rawList.any { raw ->
+                val cached = decryptedPasswordCache[raw.id]
+                cached == null || cached.updatedAt != raw.updatedAt
+            }
+            if (hasUncached) {
+                _isLoadingPasswords.value = true
+            }
+
+            val result = ArrayList<PasswordEntry>(rawList.size)
+            val chunks = rawList.chunked(50)
+            for (chunk in chunks) {
+                for (raw in chunk) {
+                    val cached = decryptedPasswordCache[raw.id]
+                    if (cached != null && cached.updatedAt == raw.updatedAt) {
+                        result.add(cached)
+                    } else {
+                        val dec = runCatching { raw.decrypted() }.getOrDefault(raw)
+                        decryptedPasswordCache[raw.id] = dec
+                        result.add(dec)
+                    }
+                }
+            }
+            val currentIds = rawList.map { it.id }.toSet()
+            decryptedPasswordCache.keys.retainAll(currentIds)
+            _isLoadingPasswords.value = false
+            result
+        }
+    }
+
+    private val _cachedDecryptedEntries: StateFlow<List<PasswordEntry>> = decryptedEntriesFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allPasswordEntries: StateFlow<List<PasswordEntry>> = combine(_cachedDecryptedEntries, debouncedSearchQuery) { entries, query ->
+        withContext(Dispatchers.Default) {
             if (query.isBlank()) {
-                decryptedEntries
+                entries
             } else {
                 val q = normalizeForSearch(query)
-                decryptedEntries.filter { entry ->
+                entries.filter { entry ->
+                    // Fast filter on plaintext fields first
                     normalizeForSearch(entry.title).contains(q) ||
-                    normalizeForSearch(entry.username).contains(q) ||
                     normalizeForSearch(entry.website).contains(q) ||
+                    normalizeForSearch(entry.username).contains(q) ||
                     normalizeForSearch(entry.notes).contains(q) ||
                     entry.getCustomFields().any { field ->
                         normalizeForSearch(field.label).contains(q) ||
@@ -565,9 +613,13 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val count = passwordDao.countEntriesByGroup(groupId)
-                if (count > 0) {
-                    passwordDao.deleteEntriesByGroupId(groupId)
+                var count = passwordDao.countEntriesByGroup(groupId)
+                passwordDao.deleteEntriesByGroupId(groupId)
+                val directChildren = passwordDao.getAllGroupsList().filter { it.parentGroupId == groupId }
+                for (child in directChildren) {
+                    count += passwordDao.countEntriesByGroup(child.id)
+                    passwordDao.deleteEntriesByGroupId(child.id)
+                    passwordDao.deleteGroupById(child.id)
                 }
                 withContext(Dispatchers.Main) {
                     onSuccess(count)
@@ -598,9 +650,12 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     }
 
     suspend fun getDecryptedEntryById(entryId: String): PasswordEntry? = withContext(Dispatchers.IO) {
+        decryptedPasswordCache[entryId]?.let { return@withContext it }
         try {
             val entry = passwordDao.getEntryById(entryId) ?: return@withContext null
-            entry.decrypted()
+            val dec = entry.decrypted()
+            decryptedPasswordCache[entryId] = dec
+            dec
         } catch (e: Throwable) {
             SyncLogger.log("SECURITY", "خطای امنیتی 15.6: شکست در رمزگشایی ورودی $entryId: ${e.message}")
             _syncState.value = SyncUiState.Error("خطای امنیتی در رمزگشایی پسورد: ${e.localizedMessage}")
@@ -658,8 +713,19 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
-                // Load existing entries in chromeGroup
-                val existingRawEntries = passwordDao.getEntriesListByGroupId(chromeGroup.id)
+                val directSubgroups = passwordDao.getAllGroupsList()
+                    .filter { it.parentGroupId == chromeGroup.id }
+                    .toMutableList()
+
+                // Load existing entries in chromeGroup and its subgroups
+                val allGroupIds = mutableListOf(chromeGroup.id)
+                allGroupIds.addAll(directSubgroups.map { it.id })
+
+                val existingRawEntries = mutableListOf<PasswordEntry>()
+                for (gid in allGroupIds) {
+                    existingRawEntries.addAll(passwordDao.getEntriesListByGroupId(gid))
+                }
+
                 val existingDecrypted = existingRawEntries.mapNotNull { entry ->
                     try {
                         val dec = entry.decrypted()
@@ -670,10 +736,15 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                val existingHashes = existingDecrypted.map { it.contentHash }.filter { it.isNotBlank() }.toMutableSet()
-                val existingByIdentity = existingDecrypted.associateBy {
-                    Triple(it.title.trim().lowercase(), it.username.trim().lowercase(), it.website.trim().lowercase())
-                }.toMutableMap()
+                val existingHashesByGroup = mutableMapOf<String, MutableSet<String>>()
+                val existingIdentityByGroup = mutableMapOf<String, MutableMap<Triple<String, String, String>, PasswordEntry>>()
+
+                for (item in existingDecrypted) {
+                    val gid = item.groupId ?: chromeGroup.id
+                    existingHashesByGroup.getOrPut(gid) { mutableSetOf() }.add(item.contentHash)
+                    val key = Triple(item.title.trim().lowercase(), item.username.trim().lowercase(), item.website.trim().lowercase())
+                    existingIdentityByGroup.getOrPut(gid) { mutableMapOf() }[key] = item
+                }
 
                 var addedCount = 0
                 var updatedCount = 0
@@ -683,19 +754,37 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
                 for (rawEntry in parseResult.entries) {
                     val plain = rawEntry.decrypted()
+                    val domainTitle = DomainUtils.extractDomainTitle(plain.website, plain.title)
+                    val domainGroup = directSubgroups.firstOrNull { it.name.trim().equals(domainTitle, ignoreCase = true) }
+                        ?: run {
+                            val newSub = PasswordGroup(
+                                name = domainTitle,
+                                parentGroupId = chromeGroup.id,
+                                createdAt = System.currentTimeMillis()
+                            )
+                            passwordDao.insertGroup(newSub)
+                            directSubgroups.add(newSub)
+                            newSub
+                        }
+                    val targetGroupId = domainGroup.id
+
                     val hash = PasswordEntry.computeHash(plain)
                     val identityKey = Triple(plain.title.trim().lowercase(), plain.username.trim().lowercase(), plain.website.trim().lowercase())
 
-                    if (existingHashes.contains(hash)) {
+                    val groupHashes = existingHashesByGroup.getOrPut(targetGroupId) { mutableSetOf() }
+                    val groupIdentities = existingIdentityByGroup.getOrPut(targetGroupId) { mutableMapOf() }
+
+                    if (groupHashes.contains(hash)) {
                         // Exact identical content already exists
                         skippedCount++
                         continue
                     }
 
-                    val existingEntry = existingByIdentity[identityKey]
+                    val existingEntry = groupIdentities[identityKey]
                     if (existingEntry != null) {
                         // Same identity but different content/hash -> Update
                         val updated = existingEntry.copy(
+                            groupId = targetGroupId,
                             password = plain.password,
                             notes = plain.notes,
                             customFieldsJson = plain.customFieldsJson,
@@ -703,21 +792,21 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                             updatedAt = System.currentTimeMillis()
                         )
                         entriesToSave.add(updated)
-                        existingHashes.add(hash)
-                        existingByIdentity[identityKey] = updated
+                        groupHashes.add(hash)
+                        groupIdentities[identityKey] = updated
                         updatedCount++
                     } else {
                         // Brand new entry
                         val newEntry = plain.copy(
                             id = java.util.UUID.randomUUID().toString(),
-                            groupId = chromeGroup.id,
+                            groupId = targetGroupId,
                             contentHash = hash,
                             createdAt = System.currentTimeMillis(),
                             updatedAt = System.currentTimeMillis()
                         )
                         entriesToSave.add(newEntry)
-                        existingHashes.add(hash)
-                        existingByIdentity[identityKey] = newEntry
+                        groupHashes.add(hash)
+                        groupIdentities[identityKey] = newEntry
                         addedCount++
                     }
                 }
@@ -771,7 +860,12 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     return@launch
                 }
 
-                val entries = passwordDao.getEntriesByGroup(chromeGroup.id).first()
+                val directSubgroups = passwordDao.getGroupsByParentId(chromeGroup.id).first()
+                val entries = mutableListOf<PasswordEntry>()
+                entries.addAll(passwordDao.getEntriesByGroup(chromeGroup.id).first())
+                for (sub in directSubgroups) {
+                    entries.addAll(passwordDao.getEntriesByGroup(sub.id).first())
+                }
                 if (entries.isEmpty()) {
                     _syncState.value = SyncUiState.Error("هیچ پسوردی در گروه «Chrome Password» برای خروجی وجود ندارد")
                     return@launch
@@ -876,7 +970,23 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
                 for (item in parseResult.items) {
                     val targetGroupId = if (item.folderName.isNullOrBlank()) {
-                        bitwardenGroup.id
+                        val domainTitle = DomainUtils.extractDomainTitle(item.website, item.title)
+                        val existing = existingSubgroups.firstOrNull {
+                            it.name.trim().equals(domainTitle, ignoreCase = true)
+                        }
+                        if (existing != null) {
+                            existing.id
+                        } else {
+                            val newGroup = PasswordGroup(
+                                id = java.util.UUID.randomUUID().toString(),
+                                name = domainTitle,
+                                parentGroupId = bitwardenGroup.id,
+                                createdAt = System.currentTimeMillis()
+                            )
+                            passwordDao.insertGroup(newGroup)
+                            existingSubgroups.add(newGroup)
+                            newGroup.id
+                        }
                     } else {
                         val folderClean = item.folderName.trim()
                         val existing = existingSubgroups.firstOrNull {

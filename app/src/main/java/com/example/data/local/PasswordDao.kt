@@ -22,6 +22,12 @@ interface PasswordDao {
     @Query("SELECT * FROM password_groups ORDER BY name ASC")
     fun getAllGroups(): Flow<List<PasswordGroup>>
 
+    @Query("SELECT * FROM password_groups")
+    suspend fun getAllGroupsList(): List<PasswordGroup>
+
+    @Query("SELECT * FROM password_groups WHERE LOWER(name) = LOWER(:name) AND ((:parentGroupId IS NULL AND parentGroupId IS NULL) OR parentGroupId = :parentGroupId) LIMIT 1")
+    suspend fun findGroupByNameAndParent(name: String, parentGroupId: String?): PasswordGroup?
+
     @Query("SELECT * FROM password_groups WHERE parentGroupId IS NULL ORDER BY name ASC")
     fun getRootGroups(): Flow<List<PasswordGroup>>
 
@@ -55,6 +61,9 @@ interface PasswordDao {
 
     @Query("SELECT * FROM password_entries ORDER BY isFavorite DESC, updatedAt DESC")
     fun getAllEntries(): Flow<List<PasswordEntry>>
+
+    @Query("SELECT * FROM password_entries")
+    suspend fun getAllEntriesList(): List<PasswordEntry>
 
     @Query("SELECT * FROM password_entries WHERE groupId = :groupId ORDER BY isFavorite DESC, updatedAt DESC")
     fun getEntriesByGroup(groupId: String): Flow<List<PasswordEntry>>

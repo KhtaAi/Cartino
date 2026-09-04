@@ -26,7 +26,11 @@ import java.util.concurrent.TimeUnit
 data class BackupRestoreResult(
     val cardsCount: Int,
     val docsCount: Int,
-    val passwordsCount: Int
+    val passwordsCount: Int,
+    val newGroupsCount: Int = 0,
+    val reusedGroupsCount: Int = 0,
+    val updatedPasswordsCount: Int = 0,
+    val skippedPasswordsCount: Int = 0
 )
 
 data class BackupPayload(
@@ -239,6 +243,10 @@ object BackupSyncManager {
         var addedCards = 0
         var addedDocs = 0
         var addedPasswords = 0
+        var updatedPasswords = 0
+        var skippedPasswords = 0
+        var newGroupsCount = 0
+        var reusedGroupsCount = 0
 
         payload.cards.forEach { card ->
             db.bankCardDao().insertCard(card.encrypted())
@@ -250,17 +258,148 @@ object BackupSyncManager {
             addedDocs++
         }
 
-        payload.passwordGroups.forEach { group ->
-            db.passwordDao().insertGroup(group)
+        // Map old groupId to resolved DB groupId
+        val groupIdMap = mutableMapOf<String, String>()
+
+        // Resolve password groups hierarchically to preserve tree structure
+        val remainingGroups = payload.passwordGroups.toMutableList()
+        var maxIterations = remainingGroups.size + 1
+        while (remainingGroups.isNotEmpty() && maxIterations > 0) {
+            maxIterations--
+            val iter = remainingGroups.iterator()
+            var progressed = false
+            while (iter.hasNext()) {
+                val group = iter.next()
+                val parentResolved = group.parentGroupId == null || groupIdMap.containsKey(group.parentGroupId)
+                if (parentResolved) {
+                    val mappedParentId = group.parentGroupId?.let { groupIdMap[it] ?: it }
+                    val existing = db.passwordDao().findGroupByNameAndParent(group.name.trim(), mappedParentId)
+                    if (existing != null) {
+                        groupIdMap[group.id] = existing.id
+                        reusedGroupsCount++
+                    } else {
+                        val newGroup = PasswordGroup(
+                            name = group.name.trim(),
+                            parentGroupId = mappedParentId,
+                            createdAt = group.createdAt
+                        )
+                        db.passwordDao().insertGroup(newGroup)
+                        groupIdMap[group.id] = newGroup.id
+                        newGroupsCount++
+                    }
+                    iter.remove()
+                    progressed = true
+                }
+            }
+            if (!progressed && remainingGroups.isNotEmpty()) {
+                // If any orphaned groups remain, resolve them under root
+                val group = remainingGroups.removeAt(0)
+                val existing = db.passwordDao().findGroupByNameAndParent(group.name.trim(), null)
+                if (existing != null) {
+                    groupIdMap[group.id] = existing.id
+                    reusedGroupsCount++
+                } else {
+                    val newGroup = PasswordGroup(
+                        name = group.name.trim(),
+                        parentGroupId = null,
+                        createdAt = group.createdAt
+                    )
+                    db.passwordDao().insertGroup(newGroup)
+                    groupIdMap[group.id] = newGroup.id
+                    newGroupsCount++
+                }
+            }
         }
 
-        payload.passwordEntries.forEach { entry ->
-            db.passwordDao().insertEntry(entry.encrypted())
-            addedPasswords++
+        // Load existing entries in DB to perform smart deduplication
+        val existingDbEntries = db.passwordDao().getAllEntriesList().mapNotNull { raw ->
+            runCatching { raw.decrypted() }.getOrNull()
+        }
+        val existingHashesByGroup = mutableMapOf<String?, MutableSet<String>>()
+        val existingByIdentity = mutableMapOf<String?, MutableMap<Triple<String, String, String>, PasswordEntry>>()
+
+        for (item in existingDbEntries) {
+            val h = if (item.contentHash.isNotBlank()) item.contentHash else PasswordEntry.computeHash(item)
+            existingHashesByGroup.getOrPut(item.groupId) { mutableSetOf() }.add(h)
+            val key = Triple(item.title.trim().lowercase(), item.username.trim().lowercase(), item.website.trim().lowercase())
+            existingByIdentity.getOrPut(item.groupId) { mutableMapOf() }[key] = item
         }
 
-        SyncLogger.log("RESTORE", "بازیابی با موفقیت انجام شد: $addedCards کارت، $addedDocs مدرک و $addedPasswords پسورد ذخیره گردید")
-        BackupRestoreResult(addedCards, addedDocs, addedPasswords)
+        for (rawEntry in payload.passwordEntries) {
+            val plain = runCatching { rawEntry.decrypted() }.getOrDefault(rawEntry)
+            val targetGroupId = if (plain.groupId == null) {
+                // Problem 4: Auto-group by domain for root items without group
+                val domainTitle = DomainUtils.extractDomainTitle(plain.website, plain.title)
+                val existingDomainGroup = db.passwordDao().findGroupByNameAndParent(domainTitle, null)
+                if (existingDomainGroup != null) {
+                    existingDomainGroup.id
+                } else {
+                    val newDomainGroup = PasswordGroup(name = domainTitle, parentGroupId = null)
+                    db.passwordDao().insertGroup(newDomainGroup)
+                    newGroupsCount++
+                    newDomainGroup.id
+                }
+            } else {
+                groupIdMap[plain.groupId] ?: plain.groupId
+            }
+
+            val hash = PasswordEntry.computeHash(plain)
+            val identityKey = Triple(plain.title.trim().lowercase(), plain.username.trim().lowercase(), plain.website.trim().lowercase())
+
+            val groupHashes = existingHashesByGroup.getOrPut(targetGroupId) { mutableSetOf() }
+            val groupIdentities = existingByIdentity.getOrPut(targetGroupId) { mutableMapOf() }
+
+            if (groupHashes.contains(hash)) {
+                // Exact duplicate content -> skip
+                skippedPasswords++
+                continue
+            }
+
+            val existingEntry = groupIdentities[identityKey]
+            if (existingEntry != null) {
+                // Identity matches but content changed -> update
+                val updated = existingEntry.copy(
+                    groupId = targetGroupId,
+                    password = plain.password,
+                    notes = plain.notes,
+                    customFieldsJson = plain.customFieldsJson,
+                    isFavorite = plain.isFavorite,
+                    contentHash = hash,
+                    updatedAt = System.currentTimeMillis()
+                )
+                db.passwordDao().insertEntry(updated.encrypted())
+                groupHashes.add(hash)
+                groupIdentities[identityKey] = updated
+                updatedPasswords++
+            } else {
+                // Brand new entry -> insert
+                val newEntry = plain.copy(
+                    id = java.util.UUID.randomUUID().toString(),
+                    groupId = targetGroupId,
+                    contentHash = hash,
+                    createdAt = System.currentTimeMillis(),
+                    updatedAt = System.currentTimeMillis()
+                )
+                db.passwordDao().insertEntry(newEntry.encrypted())
+                groupHashes.add(hash)
+                groupIdentities[identityKey] = newEntry
+                addedPasswords++
+            }
+        }
+
+        SyncLogger.log(
+            "RESTORE",
+            "بازیابی با موفقیت انجام شد: $addedCards کارت، $addedDocs مدرک، $addedPasswords پسورد جدید، $updatedPasswords به‌روزرسانی، $skippedPasswords ردشده ($newGroupsCount گروه جدید، $reusedGroupsCount گروه تطبیق‌یافته)"
+        )
+        BackupRestoreResult(
+            cardsCount = addedCards,
+            docsCount = addedDocs,
+            passwordsCount = addedPasswords,
+            newGroupsCount = newGroupsCount,
+            reusedGroupsCount = reusedGroupsCount,
+            updatedPasswordsCount = updatedPasswords,
+            skippedPasswordsCount = skippedPasswords
+        )
     }
 
     /**

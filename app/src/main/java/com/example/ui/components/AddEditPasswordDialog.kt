@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Title
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.rounded.Visibility
@@ -166,6 +167,7 @@ fun AddEditPasswordDialog(
     var website by remember(initialEntry) { mutableStateOf(initialEntry?.website ?: "") }
     var notes by remember(initialEntry) { mutableStateOf(initialEntry?.notes ?: "") }
     var isGroupDropdownExpanded by remember { mutableStateOf(false) }
+    var qrCodeDialogData by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val customFieldsList: SnapshotStateList<PasswordCustomField> = remember(initialEntry) {
         mutableStateListOf<PasswordCustomField>().apply {
@@ -269,7 +271,7 @@ fun AddEditPasswordDialog(
                             )
                         }
 
-                        // Username / Email (Read-only with Copy)
+                        // Username / Email (Read-only with Copy & QR)
                         OutlinedTextField(
                             value = username,
                             onValueChange = {},
@@ -278,18 +280,33 @@ fun AddEditPasswordDialog(
                             leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                             trailingIcon = if (username.isNotBlank()) {
                                 {
-                                    IconButton(
-                                        onClick = { copyToClipboard("Username", username, "نام کاربری کپی شد") },
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .testTag("copy_username_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "کپی نام کاربری",
-                                            tint = EmeraldStatus,
-                                            modifier = Modifier.size(20.dp)
-                                        )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(
+                                            onClick = { copyToClipboard("Username", username, "نام کاربری کپی شد") },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("copy_username_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = "کپی نام کاربری",
+                                                tint = EmeraldStatus,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { qrCodeDialogData = Pair("نام کاربری ($title)", username) },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("qr_username_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.QrCode2,
+                                                contentDescription = "کد QR نام کاربری",
+                                                tint = GoldPrimary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
                                     }
                                 }
                             } else null,
@@ -300,7 +317,7 @@ fun AddEditPasswordDialog(
                                 .testTag("password_username_readonly")
                         )
 
-                        // Password (Read-only with Mask, Visibility Toggle & Copy)
+                        // Password (Read-only with Mask, Visibility Toggle, Copy & QR)
                         OutlinedTextField(
                             value = password,
                             onValueChange = {},
@@ -330,6 +347,19 @@ fun AddEditPasswordDialog(
                                                 imageVector = Icons.Default.ContentCopy,
                                                 contentDescription = "کپی پسورد",
                                                 tint = EmeraldStatus,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { qrCodeDialogData = Pair("کلمه عبور ($title)", password) },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("qr_password_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.QrCode2,
+                                                contentDescription = "کد QR پسورد",
+                                                tint = GoldPrimary,
                                                 modifier = Modifier.size(20.dp)
                                             )
                                         }
@@ -404,7 +434,8 @@ fun AddEditPasswordDialog(
                                 customFieldsList.forEach { field ->
                                     ReadOnlyCustomFieldRow(
                                         field = field,
-                                        onCopy = { copyToClipboard(field.label, field.value, "«${field.label}» کپی شد") }
+                                        onCopy = { copyToClipboard(field.label, field.value, "«${field.label}» کپی شد") },
+                                        onShowQr = { qrCodeDialogData = Pair("${field.label} ($title)", field.value) }
                                     )
                                 }
                             }
@@ -524,6 +555,23 @@ fun AddEditPasswordDialog(
                             label = { Text("نام کاربری یا ایمیل") },
                             placeholder = { Text("user@example.com") },
                             leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                            trailingIcon = if (username.isNotBlank()) {
+                                {
+                                    IconButton(
+                                        onClick = { qrCodeDialogData = Pair("نام کاربری ($title)", username) },
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("qr_username_input_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.QrCode2,
+                                            contentDescription = "کد QR نام کاربری",
+                                            tint = GoldPrimary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            } else null,
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
@@ -540,6 +588,21 @@ fun AddEditPasswordDialog(
                                 leadingIcon = { Icon(Icons.Default.VpnKey, contentDescription = null) },
                                 trailingIcon = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (password.isNotBlank()) {
+                                            IconButton(
+                                                onClick = { qrCodeDialogData = Pair("کلمه عبور ($title)", password) },
+                                                modifier = Modifier
+                                                    .size(48.dp)
+                                                    .testTag("qr_password_input_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.QrCode2,
+                                                    contentDescription = "کد QR پسورد",
+                                                    tint = GoldPrimary,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
                                         IconButton(
                                             onClick = { password = generateQuickPassword() },
                                             modifier = Modifier
@@ -771,6 +834,14 @@ fun AddEditPasswordDialog(
             }
         )
     }
+    // QR Code Dialog
+    qrCodeDialogData?.let { (label, value) ->
+        PasswordQrCodeDialog(
+            fieldLabel = label,
+            secretValue = value,
+            onDismiss = { qrCodeDialogData = null }
+        )
+    }
 }
 
 private fun isSensitiveLabel(label: String): Boolean {
@@ -783,7 +854,8 @@ private fun isSensitiveLabel(label: String): Boolean {
 @Composable
 private fun ReadOnlyCustomFieldRow(
     field: PasswordCustomField,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onShowQr: (() -> Unit)? = null
 ) {
     var isVisible by remember { mutableStateOf(!field.isHidden) }
 
@@ -838,6 +910,19 @@ private fun ReadOnlyCustomFieldRow(
                             imageVector = Icons.Default.ContentCopy,
                             contentDescription = "کپی",
                             tint = EmeraldStatus,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+                if (onShowQr != null && field.value.isNotBlank()) {
+                    IconButton(
+                        onClick = onShowQr,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCode2,
+                            contentDescription = "کد QR",
+                            tint = GoldPrimary,
                             modifier = Modifier.size(20.dp)
                         )
                     }

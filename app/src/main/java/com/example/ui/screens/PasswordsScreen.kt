@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -57,6 +58,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -112,12 +114,57 @@ fun PasswordsScreen(
 ) {
     val context = LocalContext.current
 
-    var currentGroupId by remember { mutableStateOf<String?>(null) }
+    var navigationStack by remember { mutableStateOf(listOf<String?>(null)) }
+    val currentGroupId = navigationStack.lastOrNull()
     var filterFavoritesOnly by remember { mutableStateOf(false) }
 
     val searchQuery by viewModel.searchQuery.collectAsState()
     val allGroups by viewModel.allPasswordGroups.collectAsState()
     val allEntries by viewModel.allPasswordEntries.collectAsState()
+    val isLoadingPasswords by viewModel.isLoadingPasswords.collectAsState()
+
+    fun navigateToGroup(groupId: String?) {
+        if (groupId != currentGroupId) {
+            navigationStack = navigationStack + groupId
+        }
+    }
+
+    fun navigateBack(): Boolean {
+        if (navigationStack.size > 1) {
+            navigationStack = navigationStack.dropLast(1)
+            return true
+        }
+        return false
+    }
+
+    fun navigateToBreadcrumb(targetId: String?) {
+        val idx = navigationStack.lastIndexOf(targetId)
+        if (idx != -1) {
+            navigationStack = navigationStack.subList(0, idx + 1)
+        } else {
+            navigationStack = navigationStack + targetId
+        }
+    }
+
+    // Clean up navigation stack if groups are deleted
+    LaunchedEffect(allGroups) {
+        val validGroupIds = allGroups.map { it.id }.toSet()
+        val filtered = navigationStack.filter { it == null || it in validGroupIds }
+        if (filtered.isEmpty()) {
+            navigationStack = listOf(null)
+        } else if (filtered != navigationStack) {
+            navigationStack = filtered
+        }
+    }
+
+    // BackHandler: Handle phone back button for subgroups or active search
+    BackHandler(enabled = navigationStack.size > 1 || searchQuery.isNotBlank()) {
+        if (searchQuery.isNotBlank()) {
+            viewModel.updateSearchQuery("")
+        } else {
+            navigateBack()
+        }
+    }
 
     var isFabExpanded by remember { mutableStateOf(false) }
     var showAddGroupDialog by remember { mutableStateOf(false) }
@@ -475,6 +522,21 @@ fun PasswordsScreen(
                             .padding(horizontal = 6.dp, vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        if (navigationStack.size > 1) {
+                            IconButton(
+                                onClick = { navigateBack() },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("breadcrumbs_back_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "بازگشت به گروه قبل",
+                                    tint = GoldPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                         Row(
                             modifier = Modifier
                                 .weight(1f)
@@ -488,7 +550,7 @@ fun PasswordsScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(8.dp))
-                                        .clickable(enabled = !isLast) { currentGroupId = id }
+                                        .clickable(enabled = !isLast) { navigateToBreadcrumb(id) }
                                         .padding(horizontal = 6.dp, vertical = 4.dp)
                                 ) {
                                     if (index == 0) {
@@ -716,6 +778,18 @@ fun PasswordsScreen(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
+            // Subtle loading indicator when decrypting chunks in background
+            if (isLoadingPasswords && allEntries.isNotEmpty()) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                        .testTag("passwords_chunk_loading_indicator"),
+                    color = GoldPrimary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            }
+
             // Segmented Filter Toggle
             Surface(
                 modifier = Modifier
@@ -805,7 +879,34 @@ fun PasswordsScreen(
             // Main List
             val isEmpty = displayedGroups.isEmpty() && displayedEntries.isEmpty()
 
-            if (isEmpty) {
+            if (isLoadingPasswords && allEntries.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 80.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = GoldPrimary,
+                            strokeWidth = 3.dp,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .testTag("passwords_loading_indicator")
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "در حال بارگذاری و رمزگشایی ایمن پسوردها...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = VazirmatnFontFamily
+                        )
+                    }
+                }
+            } else if (isEmpty) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -857,7 +958,7 @@ fun PasswordsScreen(
                                 group = group,
                                 subGroupCount = subGroupCount,
                                 entryCount = entryCount,
-                                onClick = { currentGroupId = group.id },
+                                onClick = { navigateToGroup(group.id) },
                                 onRenameClick = { groupToRename = group },
                                 onDeleteClick = { groupToDelete = group }
                             )
@@ -1061,7 +1162,7 @@ fun PasswordsScreen(
                 Button(
                     onClick = {
                         if (currentGroupId == grp.id) {
-                            currentGroupId = grp.parentGroupId
+                            navigateBack()
                         }
                         viewModel.deleteGroupCascade(grp)
                         groupToDelete = null
