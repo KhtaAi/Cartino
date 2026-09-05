@@ -29,6 +29,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -55,7 +58,8 @@ sealed class SyncUiState {
 data class PasswordImportReport(
     val addedCount: Int,
     val updatedCount: Int,
-    val skippedCount: Int
+    val skippedCount: Int,
+    val archivedCount: Int = 0
 )
 
 class CartinoViewModel(application: Application) : AndroidViewModel(application) {
@@ -205,8 +209,12 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         .debounce(300L)
         .distinctUntilChanged()
 
-    private val decryptedEntriesFlow: Flow<List<PasswordEntry>> = passwordDao.getAllEntries().map { rawList ->
-        withContext(Dispatchers.Default) {
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val decryptedEntriesFlow: Flow<List<PasswordEntry>> = passwordDao.getAllEntries().flatMapLatest { rawList ->
+        flow {
+            val currentIds = rawList.map { it.id }.toSet()
+            decryptedPasswordCache.keys.retainAll(currentIds)
+
             val hasUncached = rawList.any { raw ->
                 val cached = decryptedPasswordCache[raw.id]
                 cached == null || cached.updatedAt != raw.updatedAt
@@ -215,8 +223,21 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 _isLoadingPasswords.value = true
             }
 
+            // Immediately emit whatever entries are already cached so UI displays them with zero delay
+            val initialList = rawList.mapNotNull { raw ->
+                val cached = decryptedPasswordCache[raw.id]
+                if (cached != null && cached.updatedAt == raw.updatedAt) cached else null
+            }
+            if (initialList.isNotEmpty()) {
+                emit(initialList)
+            } else if (!hasUncached) {
+                emit(emptyList())
+            }
+
+            // Progressive chunked decryption
             val result = ArrayList<PasswordEntry>(rawList.size)
-            val chunks = rawList.chunked(50)
+            val chunkSize = 20
+            val chunks = rawList.chunked(chunkSize)
             for (chunk in chunks) {
                 for (raw in chunk) {
                     val cached = decryptedPasswordCache[raw.id]
@@ -228,12 +249,11 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                         result.add(dec)
                     }
                 }
+                emit(ArrayList(result))
+                kotlinx.coroutines.yield()
             }
-            val currentIds = rawList.map { it.id }.toSet()
-            decryptedPasswordCache.keys.retainAll(currentIds)
             _isLoadingPasswords.value = false
-            result
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     private val _cachedDecryptedEntries: StateFlow<List<PasswordEntry>> = decryptedEntriesFlow
@@ -771,6 +791,9 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     DomainUtils.extractDomainTitle(it.website, it.title)
                 }.eachCount()
 
+                val csvContentHashes = mutableSetOf<String>()
+                val csvIdentityKeys = mutableSetOf<Triple<String, String, String>>()
+
                 for (plain in plainEntries) {
                     val domainTitle = DomainUtils.extractDomainTitle(plain.website, plain.title)
                     val count = domainCounts[domainTitle] ?: 0
@@ -796,6 +819,8 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
                     val hash = PasswordEntry.computeHash(plain)
                     val identityKey = Triple(plain.title.trim().lowercase(), plain.username.trim().lowercase(), plain.website.trim().lowercase())
+                    csvContentHashes.add(hash)
+                    csvIdentityKeys.add(identityKey)
 
                     val groupHashes = existingHashesByGroup.getOrPut(targetGroupId) { mutableSetOf() }
                     val groupIdentities = existingIdentityByGroup.getOrPut(targetGroupId) { mutableMapOf() }
@@ -853,17 +878,60 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     _syncState.value = SyncUiState.Progress(processedCount, totalToProcess.coerceAtLeast(1), "در حال ذخیره‌سازی پسوردها...")
                 }
 
+                // Archive logic: detect old Chrome entries not present in the new CSV
+                var archiveGroup = directSubgroups.firstOrNull { it.name.trim().equals("Archive", ignoreCase = true) }
+                val itemsToArchive = existingDecrypted.filter { old ->
+                    // If already in Archive, do not re-archive
+                    if (archiveGroup != null && old.groupId == archiveGroup.id) {
+                        return@filter false
+                    }
+                    val oldIdentity = Triple(old.title.trim().lowercase(), old.username.trim().lowercase(), old.website.trim().lowercase())
+                    val isPresentInCsv = csvContentHashes.contains(old.contentHash) || csvIdentityKeys.contains(oldIdentity)
+                    !isPresentInCsv
+                }
+
+                var archivedCount = 0
+                if (itemsToArchive.isNotEmpty()) {
+                    val targetArchiveGroup = archiveGroup ?: run {
+                        val newArchive = PasswordGroup(
+                            id = java.util.UUID.randomUUID().toString(),
+                            name = "Archive",
+                            parentGroupId = chromeGroup.id,
+                            isFavorite = false,
+                            createdAt = System.currentTimeMillis()
+                        )
+                        passwordDao.insertGroup(newArchive)
+                        directSubgroups.add(newArchive)
+                        archiveGroup = newArchive
+                        newArchive
+                    }
+
+                    val idsToArchive = itemsToArchive.map { it.id }
+                    db.withTransaction {
+                        passwordDao.updateEntriesGroupId(idsToArchive, targetArchiveGroup.id, System.currentTimeMillis())
+                    }
+                    for (item in itemsToArchive) {
+                        val cached = decryptedPasswordCache[item.id]
+                        if (cached != null) {
+                            decryptedPasswordCache[item.id] = cached.copy(groupId = targetArchiveGroup.id)
+                        }
+                    }
+                    archivedCount = itemsToArchive.size
+                }
+
                 val report = PasswordImportReport(
                     addedCount = addedCount,
                     updatedCount = updatedCount,
-                    skippedCount = skippedCount
+                    skippedCount = skippedCount,
+                    archivedCount = archivedCount
                 )
                 _lastImportReport.value = report
 
+                val archiveNote = if (archivedCount > 0) "، $archivedCount منتقل‌شده به آرشیو" else ""
                 _syncState.value = SyncUiState.Success(
-                    "واردات با موفقیت انجام شد: $addedCount جدید، $updatedCount به‌روزرسانی، $skippedCount رد شده"
+                    "واردات با موفقیت انجام شد: $addedCount جدید، $updatedCount به‌روزرسانی، $skippedCount رد شده$archiveNote"
                 )
-                SyncLogger.log("CHROME_CSV", "گزارش واردات Chrome: جدید=$addedCount، به‌روزرسانی=$updatedCount، ردشده=$skippedCount")
+                SyncLogger.log("CHROME_CSV", "گزارش واردات Chrome: جدید=$addedCount، به‌روزرسانی=$updatedCount، ردشده=$skippedCount، آرشیو=$archivedCount")
             } catch (e: Throwable) {
                 val msg = e.localizedMessage ?: "خطای ناشناخته در وارد کردن پسوردها"
                 _syncState.value = SyncUiState.Error("خطا در وارد کردن پسوردها: $msg")

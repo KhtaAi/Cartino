@@ -89,6 +89,9 @@ interface PasswordDao {
     @Query("UPDATE password_entries SET contentHash = :hash WHERE id = :id")
     suspend fun updateContentHash(id: String, hash: String)
 
+    @Query("UPDATE password_entries SET groupId = :targetGroupId, updatedAt = :updatedAt WHERE id IN (:entryIds)")
+    suspend fun updateEntriesGroupId(entryIds: List<String>, targetGroupId: String, updatedAt: Long = System.currentTimeMillis())
+
     @Query("SELECT * FROM password_entries WHERE groupId = :groupId")
     suspend fun getEntriesListByGroupId(groupId: String): List<PasswordEntry>
 

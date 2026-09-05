@@ -881,7 +881,7 @@ fun PasswordsScreen(
             // Main List
             val isEmpty = displayedGroups.isEmpty() && displayedEntries.isEmpty()
 
-            if (isLoadingPasswords && allEntries.isEmpty()) {
+            if (isLoadingPasswords && displayedGroups.isEmpty() && displayedEntries.isEmpty() && allEntries.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -908,7 +908,7 @@ fun PasswordsScreen(
                         )
                     }
                 }
-            } else if (isEmpty) {
+            } else if (isEmpty && !isLoadingPasswords) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -947,6 +947,17 @@ fun PasswordsScreen(
                     }
                 }
             } else {
+                if (isLoadingPasswords) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .height(3.dp),
+                        color = GoldPrimary,
+                        trackColor = GoldPrimary.copy(alpha = 0.2f)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
                 LazyColumn(
                     contentPadding = PaddingValues(bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
