@@ -17,6 +17,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -51,7 +53,8 @@ fun PasswordGroupItem(
     onClick: () -> Unit,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onToggleFavorite: (() -> Unit)? = null
 ) {
     var isMenuExpanded by remember { mutableStateOf(false) }
 
@@ -96,14 +99,26 @@ fun PasswordGroupItem(
                 Spacer(modifier = Modifier.width(14.dp))
 
                 Column {
-                    Text(
-                        text = group.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (group.isFavorite) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = "پین شده",
+                                tint = GoldPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.padding(top = 2.dp))
                     Text(
                         text = "$subGroupCount زیرگروه • $entryCount ورودی",
@@ -131,6 +146,23 @@ fun PasswordGroupItem(
                     expanded = isMenuExpanded,
                     onDismissRequest = { isMenuExpanded = false }
                 ) {
+                    if (onToggleFavorite != null) {
+                        DropdownMenuItem(
+                            text = { Text(if (group.isFavorite) "برداشتن پین" else "پین کردن گروه") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (group.isFavorite) Icons.Default.StarBorder else Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint = GoldPrimary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            onClick = {
+                                isMenuExpanded = false
+                                onToggleFavorite()
+                            }
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("تغییر نام") },
                         leadingIcon = {

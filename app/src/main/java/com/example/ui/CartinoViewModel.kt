@@ -563,6 +563,20 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun updateGroupFavorite(groupId: String, isFavorite: Boolean) {
+        viewModelScope.launch {
+            try {
+                passwordDao.updateGroupFavorite(groupId, isFavorite)
+            } catch (e: Throwable) {
+                SyncLogger.log("PASSWORD", "خطا در تغییر وضعیت پین گروه: ${e.message}")
+            }
+        }
+    }
+
+    fun toggleFavoritePasswordGroup(group: PasswordGroup) {
+        updateGroupFavorite(group.id, !group.isFavorite)
+    }
+
     fun deleteGroupCascade(group: PasswordGroup) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             deleteGroupAndChildrenRecursive(group.id)
@@ -752,21 +766,33 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
                 val entriesToSave = mutableListOf<PasswordEntry>()
 
-                for (rawEntry in parseResult.entries) {
-                    val plain = rawEntry.decrypted()
+                val plainEntries = parseResult.entries.map { it.decrypted() }
+                val domainCounts = plainEntries.groupingBy {
+                    DomainUtils.extractDomainTitle(it.website, it.title)
+                }.eachCount()
+
+                for (plain in plainEntries) {
                     val domainTitle = DomainUtils.extractDomainTitle(plain.website, plain.title)
-                    val domainGroup = directSubgroups.firstOrNull { it.name.trim().equals(domainTitle, ignoreCase = true) }
-                        ?: run {
-                            val newSub = PasswordGroup(
-                                name = domainTitle,
-                                parentGroupId = chromeGroup.id,
-                                createdAt = System.currentTimeMillis()
-                            )
-                            passwordDao.insertGroup(newSub)
-                            directSubgroups.add(newSub)
-                            newSub
-                        }
-                    val targetGroupId = domainGroup.id
+                    val count = domainCounts[domainTitle] ?: 0
+                    val targetGroupId = if (count >= 2) {
+                        val domainGroup = directSubgroups.firstOrNull { it.name.trim().equals(domainTitle, ignoreCase = true) }
+                            ?: run {
+                                val newSub = PasswordGroup(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    name = domainTitle,
+                                    parentGroupId = chromeGroup.id,
+                                    isFavorite = false,
+                                    createdAt = System.currentTimeMillis()
+                                )
+                                passwordDao.insertGroup(newSub)
+                                directSubgroups.add(newSub)
+                                newSub
+                            }
+                        domainGroup.id
+                    } else {
+                        // Less than 2 entries for this domain: keep in main Chrome Password group
+                        chromeGroup.id
+                    }
 
                     val hash = PasswordEntry.computeHash(plain)
                     val identityKey = Triple(plain.title.trim().lowercase(), plain.username.trim().lowercase(), plain.website.trim().lowercase())
@@ -968,24 +994,35 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
                 val entriesToSave = mutableListOf<PasswordEntry>()
 
+                val domainCounts = parseResult.items.filter { it.folderName.isNullOrBlank() }
+                    .groupingBy { DomainUtils.extractDomainTitle(it.website, it.title) }
+                    .eachCount()
+
                 for (item in parseResult.items) {
                     val targetGroupId = if (item.folderName.isNullOrBlank()) {
                         val domainTitle = DomainUtils.extractDomainTitle(item.website, item.title)
-                        val existing = existingSubgroups.firstOrNull {
-                            it.name.trim().equals(domainTitle, ignoreCase = true)
-                        }
-                        if (existing != null) {
-                            existing.id
+                        val count = domainCounts[domainTitle] ?: 0
+                        if (count >= 2) {
+                            val existing = existingSubgroups.firstOrNull {
+                                it.name.trim().equals(domainTitle, ignoreCase = true)
+                            }
+                            if (existing != null) {
+                                existing.id
+                            } else {
+                                val newGroup = PasswordGroup(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    name = domainTitle,
+                                    parentGroupId = bitwardenGroup.id,
+                                    isFavorite = false,
+                                    createdAt = System.currentTimeMillis()
+                                )
+                                passwordDao.insertGroup(newGroup)
+                                existingSubgroups.add(newGroup)
+                                newGroup.id
+                            }
                         } else {
-                            val newGroup = PasswordGroup(
-                                id = java.util.UUID.randomUUID().toString(),
-                                name = domainTitle,
-                                parentGroupId = bitwardenGroup.id,
-                                createdAt = System.currentTimeMillis()
-                            )
-                            passwordDao.insertGroup(newGroup)
-                            existingSubgroups.add(newGroup)
-                            newGroup.id
+                            // Less than 2 entries for this domain: keep in main Bitwarden Password group
+                            bitwardenGroup.id
                         }
                     } else {
                         val folderClean = item.folderName.trim()
@@ -999,6 +1036,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                                 id = java.util.UUID.randomUUID().toString(),
                                 name = folderClean,
                                 parentGroupId = bitwardenGroup.id,
+                                isFavorite = false,
                                 createdAt = System.currentTimeMillis()
                             )
                             passwordDao.insertGroup(newGroup)

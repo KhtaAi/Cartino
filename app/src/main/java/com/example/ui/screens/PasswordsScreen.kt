@@ -277,11 +277,13 @@ fun PasswordsScreen(
     // Filtered items
     val isSearching = searchQuery.isNotBlank()
 
-    val displayedGroups = remember(currentGroupId, allGroups, isSearching) {
+    val displayedGroups = remember(currentGroupId, allGroups, isSearching, filterFavoritesOnly) {
         if (isSearching) {
             emptyList()
         } else {
-            allGroups.filter { it.parentGroupId == currentGroupId }
+            val groups = allGroups.filter { it.parentGroupId == currentGroupId }
+            val filtered = if (filterFavoritesOnly) groups.filter { it.isFavorite } else groups
+            filtered.sortedWith(compareByDescending<PasswordGroup> { it.isFavorite }.thenBy { it.name.lowercase() })
         }
     }
 
@@ -960,7 +962,8 @@ fun PasswordsScreen(
                                 entryCount = entryCount,
                                 onClick = { navigateToGroup(group.id) },
                                 onRenameClick = { groupToRename = group },
-                                onDeleteClick = { groupToDelete = group }
+                                onDeleteClick = { groupToDelete = group },
+                                onToggleFavorite = { viewModel.toggleFavoritePasswordGroup(group) }
                             )
                         }
                     }

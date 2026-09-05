@@ -19,7 +19,7 @@ interface PasswordDao {
     // PasswordGroup Operations
     // ==========================================
 
-    @Query("SELECT * FROM password_groups ORDER BY name ASC")
+    @Query("SELECT * FROM password_groups ORDER BY isFavorite DESC, name ASC")
     fun getAllGroups(): Flow<List<PasswordGroup>>
 
     @Query("SELECT * FROM password_groups")
@@ -28,13 +28,13 @@ interface PasswordDao {
     @Query("SELECT * FROM password_groups WHERE LOWER(name) = LOWER(:name) AND ((:parentGroupId IS NULL AND parentGroupId IS NULL) OR parentGroupId = :parentGroupId) LIMIT 1")
     suspend fun findGroupByNameAndParent(name: String, parentGroupId: String?): PasswordGroup?
 
-    @Query("SELECT * FROM password_groups WHERE parentGroupId IS NULL ORDER BY name ASC")
+    @Query("SELECT * FROM password_groups WHERE parentGroupId IS NULL ORDER BY isFavorite DESC, name ASC")
     fun getRootGroups(): Flow<List<PasswordGroup>>
 
-    @Query("SELECT * FROM password_groups WHERE (:parentGroupId IS NULL AND parentGroupId IS NULL) OR parentGroupId = :parentGroupId ORDER BY name ASC")
+    @Query("SELECT * FROM password_groups WHERE (:parentGroupId IS NULL AND parentGroupId IS NULL) OR parentGroupId = :parentGroupId ORDER BY isFavorite DESC, name ASC")
     fun getGroupsByParentId(parentGroupId: String?): Flow<List<PasswordGroup>>
 
-    @Query("SELECT * FROM password_groups WHERE parentGroupId = :parentGroupId ORDER BY name ASC")
+    @Query("SELECT * FROM password_groups WHERE parentGroupId = :parentGroupId ORDER BY isFavorite DESC, name ASC")
     fun getChildGroups(parentGroupId: String): Flow<List<PasswordGroup>>
 
     @Query("SELECT * FROM password_groups WHERE id = :id")
@@ -45,6 +45,9 @@ interface PasswordDao {
 
     @Update
     suspend fun updateGroup(group: PasswordGroup)
+
+    @Query("UPDATE password_groups SET isFavorite = :isFavorite WHERE id = :groupId")
+    suspend fun updateGroupFavorite(groupId: String, isFavorite: Boolean)
 
     @Delete
     suspend fun deleteGroup(group: PasswordGroup)

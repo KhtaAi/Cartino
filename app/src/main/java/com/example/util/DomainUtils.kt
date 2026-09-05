@@ -8,8 +8,16 @@ object DomainUtils {
      * If the website is blank or invalid, falls back to the provided title or "سایر".
      */
     fun extractDomainTitle(website: String, fallbackTitle: String = ""): String {
+        val trimmed = website.trim()
+        if (trimmed.startsWith("192.168") ||
+            trimmed.startsWith("http://192.168", ignoreCase = true) ||
+            trimmed.startsWith("https://192.168", ignoreCase = true)
+        ) {
+            return "Local Address"
+        }
+
         try {
-            var clean = website.trim()
+            var clean = trimmed
             if (clean.isBlank()) {
                 val fallback = fallbackTitle.trim()
                 return if (fallback.isNotBlank()) fallback else "سایر"

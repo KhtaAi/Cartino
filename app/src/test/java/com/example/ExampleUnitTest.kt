@@ -61,5 +61,14 @@ class ExampleUnitTest {
     val decryptedText = com.example.util.SecurityManager.decryptData(encryptedBase64, password)
     assertEquals(sampleText, decryptedText)
   }
+
+  @Test
+  fun domainUtils_extractDomainTitle_handlesLocalAddressesAndWebsites() {
+    assertEquals("Local Address", com.example.util.DomainUtils.extractDomainTitle("192.168.1.1"))
+    assertEquals("Local Address", com.example.util.DomainUtils.extractDomainTitle("http://192.168.0.1:8080"))
+    assertEquals("Local Address", com.example.util.DomainUtils.extractDomainTitle("https://192.168.100.50/admin"))
+    assertEquals("Google", com.example.util.DomainUtils.extractDomainTitle("https://www.google.com/search"))
+    assertEquals("Bitwarden", com.example.util.DomainUtils.extractDomainTitle("vault.bitwarden.com"))
+  }
 }
 

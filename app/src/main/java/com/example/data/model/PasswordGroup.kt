@@ -9,5 +9,6 @@ data class PasswordGroup(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
     val name: String,
     val parentGroupId: String? = null,
+    val isFavorite: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
