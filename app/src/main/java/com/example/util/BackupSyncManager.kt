@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.example.data.local.CartinoDatabase
 import com.example.data.model.BankCard
+import com.example.data.model.DocumentGroup
 import com.example.data.model.IdentityDocument
 import com.example.data.model.PasswordEntry
 import com.example.data.model.PasswordGroup
@@ -30,18 +31,21 @@ data class BackupRestoreResult(
     val newGroupsCount: Int = 0,
     val reusedGroupsCount: Int = 0,
     val updatedPasswordsCount: Int = 0,
-    val skippedPasswordsCount: Int = 0
+    val skippedPasswordsCount: Int = 0,
+    val newDocGroupsCount: Int = 0,
+    val reusedDocGroupsCount: Int = 0
 )
 
 data class BackupPayload(
-    val version: Int = 2,
+    val version: Int = 3,
     val totpSecret: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val totpRequired: Boolean = false,
     val cards: List<BankCard> = emptyList(),
     val documents: List<IdentityDocument> = emptyList(),
     val passwordGroups: List<PasswordGroup> = emptyList(),
-    val passwordEntries: List<PasswordEntry> = emptyList()
+    val passwordEntries: List<PasswordEntry> = emptyList(),
+    val documentGroups: List<DocumentGroup> = emptyList()
 )
 
 data class WebDavConfig(
@@ -131,6 +135,7 @@ object BackupSyncManager {
         val db = CartinoDatabase.getDatabase(context)
         val cards = db.bankCardDao().getAllCards().first().map { it.decrypted() }
         val docs = db.identityDocumentDao().getAllDocuments().first().map { it.decrypted() }
+        val docGroups = db.identityDocumentDao().getAllGroups().first()
         val groups = db.passwordDao().getAllGroups().first()
         val entries = db.passwordDao().getAllEntries().first().map { it.decrypted() }
 
@@ -139,16 +144,20 @@ object BackupSyncManager {
         if (totpActive && secret.isNotBlank()) {
             SyncLogger.log("BACKUP", "Secret TOTP با موفقیت در فایل پشتیبان ذخیره شد")
         }
-        SyncLogger.log("BACKUP", "تعداد کارت‌ها: ${cards.size} | تعداد مدارک: ${docs.size} | تعداد گروه‌های پسورد: ${groups.size} | تعداد پسوردها: ${entries.size} | TOTP: ${if (totpActive) "فعال" else "غیرفعال"}")
+        SyncLogger.log(
+            "BACKUP",
+            "تعداد کارت‌ها: ${cards.size} | تعداد مدارک: ${docs.size} (${docGroups.size} گروه) | تعداد گروه‌های پسورد: ${groups.size} | تعداد پسوردها: ${entries.size} | TOTP: ${if (totpActive) "فعال" else "غیرفعال"}"
+        )
 
         val payload = BackupPayload(
-            version = 2,
+            version = 3,
             totpSecret = secret,
             totpRequired = totpActive,
             cards = cards,
             documents = docs,
             passwordGroups = groups,
-            passwordEntries = entries
+            passwordEntries = entries,
+            documentGroups = docGroups
         )
 
         val adapter = moshi.adapter(BackupPayload::class.java)
@@ -247,14 +256,76 @@ object BackupSyncManager {
         var skippedPasswords = 0
         var newGroupsCount = 0
         var reusedGroupsCount = 0
+        var newDocGroupsCount = 0
+        var reusedDocGroupsCount = 0
 
         payload.cards.forEach { card ->
             db.bankCardDao().insertCard(card.encrypted())
             addedCards++
         }
 
+        // Map old document groupId to resolved DB groupId
+        val docGroupIdMap = mutableMapOf<String, String>()
+
+        // Resolve document groups hierarchically to preserve tree structure
+        val remainingDocGroups = payload.documentGroups.toMutableList()
+        var maxDocGroupIterations = remainingDocGroups.size + 1
+        while (remainingDocGroups.isNotEmpty() && maxDocGroupIterations > 0) {
+            maxDocGroupIterations--
+            val iter = remainingDocGroups.iterator()
+            var progressed = false
+            while (iter.hasNext()) {
+                val group = iter.next()
+                val parentResolved = group.parentGroupId == null || docGroupIdMap.containsKey(group.parentGroupId)
+                if (parentResolved) {
+                    val mappedParentId = group.parentGroupId?.let { docGroupIdMap[it] ?: it }
+                    val existing = db.identityDocumentDao().findGroupByNameAndParent(group.name.trim(), mappedParentId)
+                    if (existing != null) {
+                        docGroupIdMap[group.id] = existing.id
+                        reusedDocGroupsCount++
+                    } else {
+                        val newGroup = DocumentGroup(
+                            name = group.name.trim(),
+                            parentGroupId = mappedParentId,
+                            createdAt = group.createdAt
+                        )
+                        db.identityDocumentDao().insertGroup(newGroup)
+                        docGroupIdMap[group.id] = newGroup.id
+                        newDocGroupsCount++
+                    }
+                    iter.remove()
+                    progressed = true
+                }
+            }
+            if (!progressed && remainingDocGroups.isNotEmpty()) {
+                // If any orphaned groups remain, resolve them under root
+                val group = remainingDocGroups.removeAt(0)
+                val existing = db.identityDocumentDao().findGroupByNameAndParent(group.name.trim(), null)
+                if (existing != null) {
+                    docGroupIdMap[group.id] = existing.id
+                    reusedDocGroupsCount++
+                } else {
+                    val newGroup = DocumentGroup(
+                        name = group.name.trim(),
+                        parentGroupId = null,
+                        createdAt = group.createdAt
+                    )
+                    db.identityDocumentDao().insertGroup(newGroup)
+                    docGroupIdMap[group.id] = newGroup.id
+                    newDocGroupsCount++
+                }
+            }
+        }
+
         payload.documents.forEach { doc ->
-            db.identityDocumentDao().insertDocument(doc.encrypted())
+            val plain = runCatching { doc.decrypted() }.getOrDefault(doc)
+            val targetGroupId = if (plain.groupId == null) {
+                null
+            } else {
+                docGroupIdMap[plain.groupId]
+            }
+            val docToSave = plain.copy(groupId = targetGroupId)
+            db.identityDocumentDao().insertDocument(docToSave.encrypted())
             addedDocs++
         }
 
@@ -389,7 +460,7 @@ object BackupSyncManager {
 
         SyncLogger.log(
             "RESTORE",
-            "بازیابی با موفقیت انجام شد: $addedCards کارت، $addedDocs مدرک، $addedPasswords پسورد جدید، $updatedPasswords به‌روزرسانی، $skippedPasswords ردشده ($newGroupsCount گروه جدید، $reusedGroupsCount گروه تطبیق‌یافته)"
+            "بازیابی با موفقیت انجام شد: $addedCards کارت، $addedDocs مدرک ($newDocGroupsCount گروه جدید مدارک، $reusedDocGroupsCount گروه تطبیق‌یافته)، $addedPasswords پسورد جدید، $updatedPasswords به‌روزرسانی، $skippedPasswords ردشده ($newGroupsCount گروه جدید پسورد، $reusedGroupsCount گروه تطبیق‌یافته)"
         )
         BackupRestoreResult(
             cardsCount = addedCards,
@@ -398,7 +469,9 @@ object BackupSyncManager {
             newGroupsCount = newGroupsCount,
             reusedGroupsCount = reusedGroupsCount,
             updatedPasswordsCount = updatedPasswords,
-            skippedPasswordsCount = skippedPasswords
+            skippedPasswordsCount = skippedPasswords,
+            newDocGroupsCount = newDocGroupsCount,
+            reusedDocGroupsCount = reusedDocGroupsCount
         )
     }
 

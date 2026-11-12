@@ -1,6 +1,7 @@
 package com.example
 
 import com.example.data.model.BankCard
+import com.example.data.model.DocumentGroup
 import com.example.data.model.DocumentType
 import com.example.data.model.IdentityDocument
 import com.example.data.model.PasswordEntry
@@ -19,8 +20,15 @@ class BackupPayloadTest {
         .build()
 
     @Test
-    fun backupPayload_roundTripWithPasswordsEncryptionAndDecryption() {
+    fun backupPayloadV3_roundTripWithDocumentGroupsEncryptionAndDecryption() {
         val password = "BackupSecretPassword987!".toCharArray()
+
+        val sampleDocGroup = DocumentGroup(
+            id = "doc-grp-1",
+            name = "مدارک شغلی",
+            parentGroupId = null,
+            createdAt = 1700000000000L
+        )
 
         val sampleGroup = PasswordGroup(
             id = "grp-test-1",
@@ -56,19 +64,21 @@ class BackupPayloadTest {
 
         val sampleDoc = IdentityDocument(
             id = "doc-test-1",
+            groupId = "doc-grp-1",
             title = "کارت ملی هوشمند",
             docType = DocumentType.NATIONAL_CARD,
             nationalCode = "0012345678"
         )
 
         val originalPayload = BackupPayload(
-            version = 2,
+            version = 3,
             totpSecret = "JBSWY3DPEHPK3PXP",
             totpRequired = true,
             cards = listOf(sampleCard),
             documents = listOf(sampleDoc),
             passwordGroups = listOf(sampleGroup),
-            passwordEntries = listOf(sampleEntry)
+            passwordEntries = listOf(sampleEntry),
+            documentGroups = listOf(sampleDocGroup)
         )
 
         // Serialize to JSON
@@ -86,13 +96,17 @@ class BackupPayloadTest {
         // Deserialize back to BackupPayload
         val restoredPayload = adapter.fromJson(decryptedJson)
         assertNotNull(restoredPayload)
-        assertEquals(2, restoredPayload!!.version)
+        assertEquals(3, restoredPayload!!.version)
         assertEquals("JBSWY3DPEHPK3PXP", restoredPayload.totpSecret)
         assertTrue(restoredPayload.totpRequired)
         assertEquals(1, restoredPayload.cards.size)
         assertEquals("6037991122334455", restoredPayload.cards[0].cardNumber)
         assertEquals(1, restoredPayload.documents.size)
         assertEquals("کارت ملی هوشمند", restoredPayload.documents[0].title)
+        assertEquals("doc-grp-1", restoredPayload.documents[0].groupId)
+        assertEquals(1, restoredPayload.documentGroups.size)
+        assertEquals("مدارک شغلی", restoredPayload.documentGroups[0].name)
+        assertEquals("doc-grp-1", restoredPayload.documentGroups[0].id)
         assertEquals(1, restoredPayload.passwordGroups.size)
         assertEquals("حساب‌های اداری", restoredPayload.passwordGroups[0].name)
         assertEquals("grp-test-1", restoredPayload.passwordGroups[0].id)
@@ -103,8 +117,41 @@ class BackupPayloadTest {
     }
 
     @Test
-    fun legacyBackupV1_deserializesGracefullyWithEmptyPasswords() {
-        // Sample JSON from legacy v1 backup without passwordGroups and passwordEntries
+    fun legacyBackupV2_deserializesGracefullyWithEmptyDocumentGroups() {
+        val legacyV2Json = """
+            {
+              "version": 2,
+              "totpSecret": "JBSWY3DPEHPK3PXP",
+              "timestamp": 1720000000000,
+              "totpRequired": false,
+              "cards": [],
+              "documents": [
+                {
+                  "id": "d1",
+                  "title": "شناسنامه",
+                  "docType": "BIRTH_CERTIFICATE",
+                  "nationalCode": "1234567890"
+                }
+              ],
+              "passwordGroups": [],
+              "passwordEntries": []
+            }
+        """.trimIndent()
+
+        val adapter = moshi.adapter(BackupPayload::class.java)
+        val parsed = adapter.fromJson(legacyV2Json)
+
+        assertNotNull(parsed)
+        assertEquals(2, parsed!!.version)
+        assertEquals(1, parsed.documents.size)
+        assertNull(parsed.documents[0].groupId)
+        assertNotNull(parsed.documentGroups)
+        assertTrue(parsed.documentGroups.isEmpty())
+    }
+
+    @Test
+    fun legacyBackupV1_deserializesGracefullyWithEmptyPasswordsAndDocumentGroups() {
+        // Sample JSON from legacy v1 backup without passwordGroups, passwordEntries, and documentGroups
         val legacyJson = """
             {
               "version": 1,
@@ -148,10 +195,13 @@ class BackupPayloadTest {
         assertEquals("بانک ملت", parsed.cards[0].bankName)
         assertEquals(1, parsed.documents.size)
         assertEquals("گواهینامه", parsed.documents[0].title)
-        // Verify backwards compatibility: missing password fields default to empty lists
+        assertNull(parsed.documents[0].groupId)
+        // Verify backwards compatibility: missing fields default to empty lists
         assertNotNull(parsed.passwordGroups)
         assertTrue(parsed.passwordGroups.isEmpty())
         assertNotNull(parsed.passwordEntries)
         assertTrue(parsed.passwordEntries.isEmpty())
+        assertNotNull(parsed.documentGroups)
+        assertTrue(parsed.documentGroups.isEmpty())
     }
 }

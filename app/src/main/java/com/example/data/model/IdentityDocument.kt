@@ -27,6 +27,7 @@ data class CustomDocField(
 @Entity(tableName = "identity_documents")
 data class IdentityDocument(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val groupId: String? = null,
     val title: String,
     val docType: DocumentType,
     val nationalCode: String = "",

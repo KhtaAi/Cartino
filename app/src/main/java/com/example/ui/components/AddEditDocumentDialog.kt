@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.BottomSheetDefaults
@@ -54,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -63,6 +65,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.CustomDocField
+import com.example.data.model.DocumentGroup
 import com.example.data.model.DocumentType
 import com.example.data.model.IdentityDocument
 import com.example.ui.theme.VazirmatnFontFamily
@@ -73,14 +76,86 @@ import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.util.UUID
 
+data class DocumentGroupHierarchyItem(
+    val group: DocumentGroup,
+    val depth: Int,
+    val fullPath: String
+)
+
+fun buildDocumentGroupHierarchy(groups: List<DocumentGroup>): List<DocumentGroupHierarchyItem> {
+    val result = mutableListOf<DocumentGroupHierarchyItem>()
+    val groupMap = groups.associateBy { it.id }
+
+    fun computeFullPath(group: DocumentGroup): String {
+        val names = mutableListOf(group.name)
+        var curr = group.parentGroupId
+        while (curr != null) {
+            val parent = groupMap[curr]
+            if (parent != null) {
+                names.add(0, parent.name)
+                curr = parent.parentGroupId
+            } else {
+                break
+            }
+        }
+        return names.joinToString(" / ")
+    }
+
+    fun addChildren(parentId: String?, depth: Int) {
+        val children = groups.filter { it.parentGroupId == parentId }
+            .sortedBy { it.name.lowercase() }
+        for (child in children) {
+            result.add(
+                DocumentGroupHierarchyItem(
+                    group = child,
+                    depth = depth,
+                    fullPath = computeFullPath(child)
+                )
+            )
+            addChildren(child.id, depth + 1)
+        }
+    }
+
+    addChildren(null, 0)
+
+    val addedIds = result.map { it.group.id }.toSet()
+    val unadded = groups.filter { it.id !in addedIds }.sortedBy { it.name.lowercase() }
+    for (orphan in unadded) {
+        result.add(
+            DocumentGroupHierarchyItem(
+                group = orphan,
+                depth = 0,
+                fullPath = computeFullPath(orphan)
+            )
+        )
+    }
+
+    return result
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddEditDocumentDialog(
     initialDocument: IdentityDocument? = null,
+    availableGroups: List<DocumentGroup> = emptyList(),
+    defaultGroupId: String? = null,
     onDismiss: () -> Unit,
     onSave: (IdentityDocument) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    val initialGroupId = remember(initialDocument, defaultGroupId, availableGroups) {
+        val rawId = if (initialDocument != null) initialDocument.groupId else defaultGroupId
+        if (rawId != null && availableGroups.none { it.id == rawId }) {
+            null
+        } else {
+            rawId
+        }
+    }
+    var selectedGroupId by remember(initialGroupId) { mutableStateOf(initialGroupId) }
+    var isGroupDropdownExpanded by remember { mutableStateOf(false) }
+
+    val hierarchicalGroups = remember(availableGroups) { buildDocumentGroupHierarchy(availableGroups) }
 
     var title by remember { mutableStateOf(initialDocument?.title ?: "") }
     var selectedType by remember { mutableStateOf(initialDocument?.docType ?: DocumentType.NATIONAL_CARD) }
@@ -196,6 +271,89 @@ fun AddEditDocumentDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                // Document Group Selector (ExposedDropdownMenuBox full width)
+                ExposedDropdownMenuBox(
+                    expanded = isGroupDropdownExpanded,
+                    onExpandedChange = { isGroupDropdownExpanded = !isGroupDropdownExpanded },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val selectedHierarchyItem = hierarchicalGroups.find { it.group.id == selectedGroupId }
+                    val selectedGroupName = selectedHierarchyItem?.fullPath ?: "بدون گروه (ریشه)"
+
+                    OutlinedTextField(
+                        value = selectedGroupName,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("دسته‌بندی / گروه", style = MaterialTheme.typography.bodyMedium) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Folder,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.secondary
+                            )
+                        },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = isGroupDropdownExpanded) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth()
+                            .testTag("document_group_selector")
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = isGroupDropdownExpanded,
+                        onDismissRequest = { isGroupDropdownExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "بدون گروه (ریشه)",
+                                    fontWeight = if (selectedGroupId == null) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selectedGroupId == null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Folder,
+                                    contentDescription = null,
+                                    tint = if (selectedGroupId == null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            onClick = {
+                                selectedGroupId = null
+                                isGroupDropdownExpanded = false
+                            },
+                            modifier = Modifier.testTag("document_group_option_root")
+                        )
+
+                        hierarchicalGroups.forEach { item ->
+                            val isSelected = selectedGroupId == item.group.id
+                            val indent = "    ".repeat(item.depth)
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = if (item.depth > 0) "$indent${item.fullPath}" else item.group.name,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Folder,
+                                        contentDescription = null,
+                                        tint = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    selectedGroupId = item.group.id
+                                    isGroupDropdownExpanded = false
+                                },
+                                modifier = Modifier.testTag("document_group_option_${item.group.id}")
+                            )
+                        }
+                    }
+                }
 
                 // Main Fields Section Title
                 Text(
@@ -462,6 +620,7 @@ fun AddEditDocumentDialog(
                             val fieldPlacementsJsonString = mapAdapter.toJson(defaultPlacements.toMap())
 
                             val docToSave = (initialDocument ?: IdentityDocument(
+                                groupId = selectedGroupId,
                                 title = title.ifBlank { selectedType.titleFa },
                                 docType = selectedType,
                                 nationalCode = cleanNationalCode,
@@ -473,6 +632,7 @@ fun AddEditDocumentDialog(
                                 fieldPlacementsJson = fieldPlacementsJsonString,
                                 reminderMonthsBefore = reminderMonths
                             )).copy(
+                                groupId = selectedGroupId,
                                 title = title.ifBlank { selectedType.titleFa },
                                 docType = selectedType,
                                 nationalCode = cleanNationalCode,

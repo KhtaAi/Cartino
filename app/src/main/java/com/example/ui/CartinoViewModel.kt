@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.CartinoDatabase
 import com.example.data.model.BankCard
+import com.example.data.model.DocumentGroup
 import com.example.data.model.DocumentType
 import com.example.data.model.IdentityDocument
 import com.example.data.model.PasswordGroup
@@ -198,6 +199,11 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     val allPasswordGroups: StateFlow<List<PasswordGroup>> = passwordDao.getAllGroups()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allDocumentGroups: StateFlow<List<DocumentGroup>> = docDao.getAllGroups()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val documentGroups: StateFlow<List<DocumentGroup>> = allDocumentGroups
 
     private val _isLoadingPasswords = MutableStateFlow(false)
     val isLoadingPasswords: StateFlow<Boolean> = _isLoadingPasswords.asStateFlow()
@@ -575,6 +581,75 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
             com.example.util.ExpiryReminderManager.clearItemState(getApplication(), "doc_${doc.id}")
             docDao.deleteDocumentById(doc.id)
         }
+    }
+
+    fun addOrUpdateDocumentGroup(group: DocumentGroup) {
+        viewModelScope.launch {
+            docDao.insertGroup(group)
+        }
+    }
+
+    fun addOrUpdateGroup(group: DocumentGroup) {
+        addOrUpdateDocumentGroup(group)
+    }
+
+    fun deleteDocumentGroupCascade(
+        groupId: String,
+        onSuccess: (Int) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val allGroups = docDao.getAllGroupsList()
+                fun collectDescendantIds(parentId: String): List<String> {
+                    val children = allGroups.filter { it.parentGroupId == parentId }
+                    val list = mutableListOf<String>()
+                    for (child in children) {
+                        list.addAll(collectDescendantIds(child.id))
+                        list.add(child.id)
+                    }
+                    return list
+                }
+
+                val groupsToDelete = collectDescendantIds(groupId) + groupId
+                var totalDeletedDocs = 0
+
+                for (gId in groupsToDelete) {
+                    val docsInGroup = docDao.getDocumentsListByGroupId(gId)
+                    for (doc in docsInGroup) {
+                        com.example.util.ExpiryReminderManager.clearItemState(getApplication(), "doc_${doc.id}")
+                    }
+                    totalDeletedDocs += docsInGroup.size
+                    docDao.deleteDocumentsByGroupId(gId)
+                    docDao.deleteGroupById(gId)
+                }
+
+                withContext(Dispatchers.Main) {
+                    onSuccess(totalDeletedDocs)
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("DOCUMENT", "خطا در حذف آبشاری گروه مدارک: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در حذف گروه مدارک: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
+
+    fun deleteDocumentGroupCascade(
+        group: DocumentGroup,
+        onSuccess: (Int) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        deleteDocumentGroupCascade(group.id, onSuccess, onError)
+    }
+
+    fun deleteGroupCascade(
+        group: DocumentGroup,
+        onSuccess: (Int) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        deleteDocumentGroupCascade(group.id, onSuccess, onError)
     }
 
     fun addOrUpdateGroup(group: PasswordGroup) {
@@ -1376,9 +1451,11 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 val cardsCount = result.cardsCount
                 val docsCount = result.docsCount
                 val passwordsCount = result.passwordsCount
+                val newDocGroupsCount = result.newDocGroupsCount
+                val reusedDocGroupsCount = result.reusedDocGroupsCount
                 _totpSecret.value = safeGetEncryptedString("totp_secret", "")
                 _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
-                _syncState.value = SyncUiState.Success("بازیابی اطلاعات با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک، $passwordsCount پسورد)")
+                _syncState.value = SyncUiState.Success("بازیابی اطلاعات با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک، $newDocGroupsCount گروه مدرک جدید، $reusedDocGroupsCount گروه مدرک تطبیق‌یافته، $passwordsCount پسورد)")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "کلمه عبور اشتباه است یا فایل انتخاب‌شده معتبر نیست")
             }
@@ -1434,9 +1511,11 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 val cardsCount = result.cardsCount
                 val docsCount = result.docsCount
                 val passwordsCount = result.passwordsCount
+                val newDocGroupsCount = result.newDocGroupsCount
+                val reusedDocGroupsCount = result.reusedDocGroupsCount
                 _totpSecret.value = safeGetEncryptedString("totp_secret", "")
                 _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
-                _syncState.value = SyncUiState.Success("بازیابی از سرور WebDAV با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک، $passwordsCount پسورد)")
+                _syncState.value = SyncUiState.Success("بازیابی از سرور WebDAV با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک، $newDocGroupsCount گروه مدرک جدید، $reusedDocGroupsCount گروه مدرک تطبیق‌یافته، $passwordsCount پسورد)")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "خطا در دریافت فایل از WebDAV")
             }

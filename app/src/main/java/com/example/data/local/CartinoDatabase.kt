@@ -9,6 +9,7 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.BankCard
+import com.example.data.model.DocumentGroup
 import com.example.data.model.DocumentType
 import com.example.data.model.GeneratedPasswordHistory
 import com.example.data.model.IdentityDocument
@@ -56,15 +57,25 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `document_groups` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `parentGroupId` TEXT, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL("ALTER TABLE identity_documents ADD COLUMN groupId TEXT")
+    }
+}
+
 @Database(
     entities = [
         BankCard::class,
         IdentityDocument::class,
+        DocumentGroup::class,
         PasswordGroup::class,
         PasswordEntry::class,
         GeneratedPasswordHistory::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(DocumentTypeConverter::class)
@@ -84,8 +95,7 @@ abstract class CartinoDatabase : RoomDatabase() {
                     CartinoDatabase::class.java,
                     "cartino_secure_db"
                 )
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
-                .fallbackToDestructiveMigration()
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .build()
                 INSTANCE = instance
                 instance

@@ -113,6 +113,7 @@ fun MainScreen(
 
     val cards by viewModel.allCards.collectAsState()
     val documents by viewModel.allDocuments.collectAsState()
+    val documentGroups by viewModel.allDocumentGroups.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val scannedCardData by viewModel.scannedCardData.collectAsState()
     val isBiometricEnabled by viewModel.isBiometricEnabled.collectAsState()
@@ -389,10 +390,15 @@ fun MainScreen(
                         )
                         CartinoTab.DOCUMENTS -> DocumentsScreen(
                             documents = documents,
+                            groups = documentGroups,
                             searchQuery = searchQuery,
                             onSearchQueryChange = { viewModel.updateSearchQuery(it) },
                             onDeleteDocument = { viewModel.deleteDocument(it) },
-                            onSaveDocument = { viewModel.addOrUpdateDocument(it) }
+                            onSaveDocument = { viewModel.addOrUpdateDocument(it) },
+                            onAddOrUpdateGroup = { viewModel.addOrUpdateDocumentGroup(it) },
+                            onDeleteGroupCascade = { group, onSuccess, onError ->
+                                viewModel.deleteDocumentGroupCascade(group, onSuccess, onError)
+                            }
                         )
                         CartinoTab.PASSWORDS -> PasswordsScreen(
                             viewModel = viewModel
