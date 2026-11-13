@@ -19,8 +19,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.VpnKey
@@ -42,11 +40,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -64,10 +60,10 @@ fun PasswordEntryItem(
     onDeleteClick: () -> Unit,
     onCopyUsername: () -> Unit,
     onCopyPassword: () -> Unit,
+    onDuplicateClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isMenuExpanded by remember { mutableStateOf(false) }
-    var showPasswordQrDialog by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier
@@ -116,14 +112,12 @@ fun PasswordEntryItem(
                 Spacer(modifier = Modifier.width(14.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.Top) {
                         Text(
                             text = entry.title,
-                            style = MaterialTheme.typography.titleMedium,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
                         if (entry.isFavorite) {
@@ -132,7 +126,9 @@ fun PasswordEntryItem(
                                 imageVector = Icons.Default.Star,
                                 contentDescription = "Pinned",
                                 tint = GoldPrimary,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier
+                                    .padding(top = 2.dp)
+                                    .size(16.dp)
                             )
                         }
                     }
@@ -181,162 +177,123 @@ fun PasswordEntryItem(
                 }
             }
 
-            // Quick Actions & Menu
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Quick Copy Password button
+            // Overflow Menu
+            Box {
                 IconButton(
-                    onClick = onCopyPassword,
+                    onClick = { isMenuExpanded = true },
                     modifier = Modifier
                         .size(48.dp)
-                        .testTag("copy_password_${entry.id}")
+                        .testTag("password_entry_menu_${entry.id}")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "کپی پسورد",
-                        tint = EmeraldStatus,
-                        modifier = Modifier.size(20.dp)
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "گزینه‌های بیشتر",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                // Quick QR Code button
-                IconButton(
-                    onClick = { showPasswordQrDialog = true },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("qr_password_${entry.id}")
+                DropdownMenu(
+                    expanded = isMenuExpanded,
+                    onDismissRequest = { isMenuExpanded = false }
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.QrCode2,
-                        contentDescription = "کد QR پسورد",
-                        tint = GoldPrimary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Box {
-                    IconButton(
-                        onClick = { isMenuExpanded = true },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .testTag("password_entry_menu_${entry.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "گزینه‌های بیشتر",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = isMenuExpanded,
-                        onDismissRequest = { isMenuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("کپی پسورد") },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.ContentCopy,
-                                    contentDescription = null,
-                                    tint = EmeraldStatus,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                isMenuExpanded = false
-                                onCopyPassword()
-                            }
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("نمایش کد QR") },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.QrCode2,
-                                    contentDescription = null,
-                                    tint = GoldPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                isMenuExpanded = false
-                                showPasswordQrDialog = true
-                            }
-                        )
-
-                        if (entry.username.isNotBlank()) {
-                            DropdownMenuItem(
-                                text = { Text("کپی نام کاربری") },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Person,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                },
-                                onClick = {
-                                    isMenuExpanded = false
-                                    onCopyUsername()
-                                }
+                    DropdownMenuItem(
+                        text = { Text("کپی پسورد") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                tint = EmeraldStatus,
+                                modifier = Modifier.size(20.dp)
                             )
+                        },
+                        onClick = {
+                            isMenuExpanded = false
+                            onCopyPassword()
                         }
+                    )
 
+                    DropdownMenuItem(
+                        text = { Text("کپی مجدد") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = null,
+                                tint = GoldPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        onClick = {
+                            isMenuExpanded = false
+                            onDuplicateClick()
+                        },
+                        modifier = Modifier.testTag("duplicate_password_entry_${entry.id}")
+                    )
+
+                    if (entry.username.isNotBlank()) {
                         DropdownMenuItem(
-                            text = { Text(if (entry.isFavorite) "برداشتن سنجاق" else "سنجاق کردن") },
+                            text = { Text("کپی نام کاربری") },
                             leadingIcon = {
                                 Icon(
-                                    if (entry.isFavorite) Icons.Default.StarBorder else Icons.Default.Star,
+                                    Icons.Default.Person,
                                     contentDescription = null,
-                                    tint = GoldPrimary,
                                     modifier = Modifier.size(20.dp)
                                 )
                             },
                             onClick = {
                                 isMenuExpanded = false
-                                onFavoriteToggle()
-                            }
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("ویرایش") },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Edit,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                isMenuExpanded = false
-                                onEditClick()
-                            }
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("حذف", color = MaterialTheme.colorScheme.error) },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            onClick = {
-                                isMenuExpanded = false
-                                onDeleteClick()
+                                onCopyUsername()
                             }
                         )
                     }
+
+                    DropdownMenuItem(
+                        text = { Text(if (entry.isFavorite) "برداشتن سنجاق" else "سنجاق کردن") },
+                        leadingIcon = {
+                            Icon(
+                                if (entry.isFavorite) Icons.Default.StarBorder else Icons.Default.Star,
+                                contentDescription = null,
+                                tint = GoldPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        onClick = {
+                            isMenuExpanded = false
+                            onFavoriteToggle()
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("ویرایش") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        onClick = {
+                            isMenuExpanded = false
+                            onEditClick()
+                        }
+                    )
+
+                    DropdownMenuItem(
+                        text = { Text("حذف", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        onClick = {
+                            isMenuExpanded = false
+                            onDeleteClick()
+                        }
+                    )
                 }
             }
         }
-    }
-
-    if (showPasswordQrDialog) {
-        PasswordQrCodeDialog(
-            fieldLabel = "کلمه عبور (${entry.title})",
-            secretValue = entry.password,
-            onDismiss = { showPasswordQrDialog = false }
-        )
     }
 }

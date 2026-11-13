@@ -16,15 +16,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -35,6 +38,7 @@ import androidx.compose.material.icons.filled.Notes
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Title
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.rounded.Visibility
@@ -44,21 +48,25 @@ import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,6 +74,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,9 +90,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,7 +106,9 @@ import com.example.ui.theme.EmeraldStatus
 import com.example.ui.theme.GoldPrimary
 import com.example.ui.theme.VazirmatnFontFamily
 import com.example.util.ClipboardAutoClearManager
+import com.example.util.PasswordGroupTree
 import java.security.SecureRandom
+import kotlin.math.roundToInt
 
 private enum class PasswordStrength(val labelFa: String, val color: Color, val progress: Float) {
     WEAK("ضعیف", Color(0xFFEF4444), 0.33f),
@@ -139,6 +152,19 @@ private fun generateQuickPassword(length: Int = 16): String {
     return chars.joinToString("")
 }
 
+private fun parseQuickPasswordLength(input: String): Int? {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) return null
+    val normalized = trimmed.map { ch ->
+        when (ch) {
+            in '۰'..'۹' -> ('0'.code + (ch.code - '۰'.code)).toChar()
+            in '٠'..'٩' -> ('0'.code + (ch.code - '٠'.code)).toChar()
+            else -> ch
+        }
+    }.joinToString("")
+    return normalized.toIntOrNull()
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddEditPasswordDialog(
@@ -160,7 +186,15 @@ fun AddEditPasswordDialog(
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
     var title by remember(initialEntry) { mutableStateOf(initialEntry?.title ?: "") }
-    var selectedGroupId by remember(initialEntry, groupId) { mutableStateOf(initialEntry?.groupId ?: groupId) }
+    val originGroupId = remember(initialEntry, groupId) { initialEntry?.groupId ?: groupId }
+    val groupSelectorPolicy = remember(originGroupId, availableGroups) {
+        PasswordGroupTree.resolveSelectorPolicy(
+            allGroups = availableGroups,
+            originGroupId = originGroupId
+        )
+    }
+    var selectedGroupId by remember(initialEntry, groupId) { mutableStateOf(originGroupId) }
+    var groupSearchQuery by remember(originGroupId, availableGroups) { mutableStateOf("") }
     var username by remember(initialEntry) { mutableStateOf(initialEntry?.username ?: "") }
     var password by remember(initialEntry) { mutableStateOf(initialEntry?.password ?: "") }
     var isPasswordVisible by remember { mutableStateOf(false) }
@@ -168,6 +202,9 @@ fun AddEditPasswordDialog(
     var notes by remember(initialEntry) { mutableStateOf(initialEntry?.notes ?: "") }
     var isGroupDropdownExpanded by remember { mutableStateOf(false) }
     var qrCodeDialogData by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showGenerateLengthDialog by remember { mutableStateOf(false) }
+    var quickLengthInput by remember { mutableStateOf("16") }
+    var quickLengthSlider by remember { mutableFloatStateOf(16f) }
 
     val customFieldsList: SnapshotStateList<PasswordCustomField> = remember(initialEntry) {
         mutableStateListOf<PasswordCustomField>().apply {
@@ -507,9 +544,24 @@ fun AddEditPasswordDialog(
 
                         // Group Selector
                         if (availableGroups.isNotEmpty()) {
+                            fun closeGroupMenu() {
+                                isGroupDropdownExpanded = false
+                                groupSearchQuery = ""
+                            }
+
+                            val filteredGroupNodes = remember(groupSelectorPolicy.treeNodes, groupSearchQuery) {
+                                PasswordGroupTree.filterTree(groupSelectorPolicy.treeNodes, groupSearchQuery)
+                            }
+                            val isGroupSearchEmpty = groupSearchQuery.isBlank()
+
                             ExposedDropdownMenuBox(
                                 expanded = isGroupDropdownExpanded,
-                                onExpandedChange = { isGroupDropdownExpanded = it }
+                                onExpandedChange = { expanded ->
+                                    isGroupDropdownExpanded = expanded
+                                    if (!expanded) {
+                                        groupSearchQuery = ""
+                                    }
+                                }
                             ) {
                                 val currentGroupName = availableGroups.find { it.id == selectedGroupId }?.name ?: "بدون گروه (ریشه)"
                                 OutlinedTextField(
@@ -522,27 +574,164 @@ fun AddEditPasswordDialog(
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .menuAnchor()
+                                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                        .testTag("password_group_selector")
                                 )
-                                ExposedDropdownMenu(
+                                DropdownMenu(
                                     expanded = isGroupDropdownExpanded,
-                                    onDismissRequest = { isGroupDropdownExpanded = false }
+                                    onDismissRequest = { closeGroupMenu() },
+                                    modifier = Modifier.exposedDropdownSize()
                                 ) {
-                                    DropdownMenuItem(
-                                        text = { Text("بدون گروه (ریشه)") },
-                                        onClick = {
-                                            selectedGroupId = null
-                                            isGroupDropdownExpanded = false
-                                        }
-                                    )
-                                    availableGroups.forEach { grp ->
-                                        DropdownMenuItem(
-                                            text = { Text(grp.name) },
-                                            onClick = {
-                                                selectedGroupId = grp.id
-                                                isGroupDropdownExpanded = false
+                                    OutlinedTextField(
+                                        value = groupSearchQuery,
+                                        onValueChange = { groupSearchQuery = it },
+                                        placeholder = {
+                                            Text(
+                                                text = "جستجوی گروه...",
+                                                fontFamily = VazirmatnFontFamily,
+                                                fontSize = 13.sp
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Default.Search,
+                                                contentDescription = null,
+                                                tint = GoldPrimary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        },
+                                        trailingIcon = if (groupSearchQuery.isNotEmpty()) {
+                                            {
+                                                IconButton(onClick = { groupSearchQuery = "" }) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Close,
+                                                        contentDescription = "پاک کردن جستجو",
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
-                                        )
+                                        } else null,
+                                        singleLine = true,
+                                        textStyle = TextStyle(
+                                            fontFamily = VazirmatnFontFamily,
+                                            fontSize = 13.sp
+                                        ),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                            .testTag("group_selector_search_input")
+                                    )
+
+                                    HorizontalDivider(
+                                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                                        modifier = Modifier.padding(bottom = 4.dp)
+                                    )
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 280.dp)
+                                            .verticalScroll(rememberScrollState())
+                                    ) {
+                                        if (groupSelectorPolicy.allowRoot && isGroupSearchEmpty) {
+                                            val isRootSelected = selectedGroupId == null
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = "بدون گروه (ریشه)",
+                                                        fontFamily = VazirmatnFontFamily,
+                                                        fontWeight = if (isRootSelected) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isRootSelected) GoldPrimary else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Folder,
+                                                        contentDescription = null,
+                                                        tint = if (isRootSelected) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                },
+                                                trailingIcon = if (isRootSelected) {
+                                                    {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Check,
+                                                            contentDescription = null,
+                                                            tint = GoldPrimary,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                } else null,
+                                                onClick = {
+                                                    selectedGroupId = null
+                                                    closeGroupMenu()
+                                                },
+                                                modifier = if (isRootSelected) {
+                                                    Modifier.background(GoldPrimary.copy(alpha = 0.12f))
+                                                } else {
+                                                    Modifier
+                                                }
+                                            )
+                                        }
+
+                                        if (filteredGroupNodes.isEmpty() && (!isGroupSearchEmpty || !groupSelectorPolicy.allowRoot)) {
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = "گروهی یافت نشد",
+                                                        fontFamily = VazirmatnFontFamily,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                },
+                                                enabled = false,
+                                                onClick = {}
+                                            )
+                                        } else {
+                                            filteredGroupNodes.forEach { node ->
+                                                val isSelected = node.group.id == selectedGroupId
+                                                val indentStart = (node.depth * 16).dp
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            text = node.group.name,
+                                                            fontFamily = VazirmatnFontFamily,
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (isSelected) GoldPrimary else MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                    },
+                                                    leadingIcon = {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Folder,
+                                                            contentDescription = null,
+                                                            tint = if (isSelected) GoldPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            modifier = Modifier
+                                                                .padding(start = indentStart)
+                                                                .size(20.dp)
+                                                        )
+                                                    },
+                                                    trailingIcon = if (isSelected) {
+                                                        {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                tint = GoldPrimary,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                        }
+                                                    } else null,
+                                                    onClick = {
+                                                        selectedGroupId = node.group.id
+                                                        closeGroupMenu()
+                                                    },
+                                                    modifier = if (isSelected) {
+                                                        Modifier.background(GoldPrimary.copy(alpha = 0.12f))
+                                                    } else {
+                                                        Modifier
+                                                    }
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -604,7 +793,11 @@ fun AddEditPasswordDialog(
                                             }
                                         }
                                         IconButton(
-                                            onClick = { password = generateQuickPassword() },
+                                            onClick = {
+                                                quickLengthInput = "16"
+                                                quickLengthSlider = 16f
+                                                showGenerateLengthDialog = true
+                                            },
                                             modifier = Modifier
                                                 .size(48.dp)
                                                 .testTag("generate_secure_password_button")
@@ -834,6 +1027,116 @@ fun AddEditPasswordDialog(
             }
         )
     }
+    // Quick Password Length Selection Dialog
+    if (showGenerateLengthDialog) {
+        val parsedLength = parseQuickPasswordLength(quickLengthInput)
+        val isLengthValid = parsedLength != null && parsedLength in 8..128
+        val lengthErrorMessage = when {
+            quickLengthInput.isBlank() || parsedLength == null -> "لطفاً یک عدد صحیح وارد کنید"
+            parsedLength !in 8..128 -> "طول پسورد باید بین \u20688\u2069 تا \u2068128\u2069 کاراکتر باشد"
+            else -> null
+        }
+
+        AlertDialog(
+            onDismissRequest = { showGenerateLengthDialog = false },
+            title = {
+                Text(
+                    text = "تولید پسورد امن",
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = VazirmatnFontFamily
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "طول پسورد را تعیین کنید (\u20688\u2069 تا \u2068128\u2069 کاراکتر)",
+                        fontFamily = VazirmatnFontFamily,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = quickLengthInput,
+                        onValueChange = { newValue ->
+                            quickLengthInput = newValue
+                            val parsed = parseQuickPasswordLength(newValue)
+                            if (parsed != null && parsed in 8..128) {
+                                quickLengthSlider = parsed.toFloat()
+                            }
+                        },
+                        label = { Text("طول پسورد", fontFamily = VazirmatnFontFamily) },
+                        singleLine = true,
+                        isError = lengthErrorMessage != null,
+                        supportingText = lengthErrorMessage?.let { errMsg ->
+                            {
+                                Text(
+                                    text = errMsg,
+                                    fontFamily = VazirmatnFontFamily,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        textStyle = TextStyle(
+                            fontFamily = VazirmatnFontFamily,
+                            textDirection = TextDirection.Ltr
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("quick_password_length_input")
+                    )
+
+                    Slider(
+                        value = quickLengthSlider,
+                        onValueChange = { newValue ->
+                            val rounded = newValue.roundToInt().coerceIn(8, 128)
+                            quickLengthSlider = rounded.toFloat()
+                            quickLengthInput = rounded.toString()
+                        },
+                        valueRange = 8f..128f,
+                        steps = 119,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("quick_password_length_slider")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (parsedLength != null && parsedLength in 8..128) {
+                            password = generateQuickPassword(parsedLength)
+                            showGenerateLengthDialog = false
+                        }
+                    },
+                    enabled = isLengthValid,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("confirm_generate_password_button")
+                ) {
+                    Text(
+                        text = "تولید",
+                        fontFamily = VazirmatnFontFamily,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showGenerateLengthDialog = false }
+                ) {
+                    Text(
+                        text = "انصراف",
+                        fontFamily = VazirmatnFontFamily
+                    )
+                }
+            }
+        )
+    }
+
     // QR Code Dialog
     qrCodeDialogData?.let { (label, value) ->
         PasswordQrCodeDialog(

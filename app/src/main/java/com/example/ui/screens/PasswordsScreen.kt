@@ -1027,6 +1027,28 @@ fun PasswordsScreen(
                                     clipboard.setPrimaryClip(ClipData.newPlainText("Password", entry.password))
                                     ClipboardAutoClearManager.onCopied(context, entry.password)
                                     Toast.makeText(context, "پسورد کپی شد", Toast.LENGTH_SHORT).show()
+                                },
+                                onDuplicateClick = {
+                                    coroutineScope.launch {
+                                        val decrypted = viewModel.getDecryptedEntryById(entry.id)
+                                        if (decrypted != null) {
+                                            val now = System.currentTimeMillis()
+                                            val duplicatedEntry = decrypted.copy(
+                                                id = java.util.UUID.randomUUID().toString(),
+                                                groupId = currentGroupId,
+                                                title = "${decrypted.title} (کپی)",
+                                                contentHash = "",
+                                                createdAt = now,
+                                                updatedAt = now
+                                            )
+                                            viewModel.addOrUpdatePasswordEntry(duplicatedEntry)
+                                            Toast.makeText(
+                                                context,
+                                                "یک کپی از پسورد در همین گروه ایجاد شد",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
                                 }
                             )
                         }
