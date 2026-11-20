@@ -309,6 +309,17 @@ android {
 }
 ```
 
+**Execution-Time Guard Refinement (0.5):** Missing or invalid `SIGNING_*`
+variables MUST NOT throw `GradleException` during the Gradle configuration
+phase, because configuration-time failures also break `:app:assembleDebug`,
+unit tests, `compile_applet`, and IDE previews. Instead, leave
+`buildTypes.release` without a `signingConfig` when signing is incomplete and
+enforce a runtime execution guard (e.g., a `verifyReleaseSigning` task bound
+to release artifact tasks) that fails before any release APK/AAB is produced.
+Use Gradle `providers.environmentVariable(...)` for configuration cache
+compatibility. The prohibition against falling back to any debug keystore
+remains absolute.
+
 ### 6.3. ABI splits
 Default ABI set: `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`. Also generate a
 universal APK.
@@ -741,6 +752,13 @@ After completing the work, the agent must output a summary containing:
 - در پایان فرآیند واردات، باید گزارشی شفاف و شامل تعداد موارد جدید، به‌روزرسانی‌شده و رد شده به کاربر نمایش داده شود.
 - برای رکوردهای قدیمی، محاسبه و ثبت `contentHash` باید به صورت خودکار در پس‌زمینه و بدون اختلال در عملکرد برنامه انجام گیرد.
 
+### 15.9 CI Toolchain Alignment (JDK & Gradle Pinning)
+- The `JAVA_VERSION` and pinned Gradle version (`gradle-version` in `gradle/actions/setup-gradle`) in `.github/workflows/android-release.yml` MUST align with the toolchain versions verified in the build environment (e.g., JDK 21 and Gradle 9.3.1 for AGP 9.1.1) and satisfy the minimum Gradle version required by AGP.
+- Pinning `gradle-version` complements — and never replaces — the Gradle health-check launcher (`15.1`) and `validate-wrappers: false` (`15.3`).
+
+### 15.10 Android SDK License Acceptance in CI
+- When `compileSdk` targets a platform/minor SDK version not yet installed on the GitHub Actions runner, the release workflow MUST accept Android SDK licenses prior to invoking Gradle so AGP can automatically download the required platform and build-tools without hardcoding component versions.
+
 ---
 
 ## 16. Verified State Record (living, per-repository)
@@ -784,6 +802,9 @@ ANY repository with zero edits:
 - گروه‌بندی خودکار براساس دامنه وبسایت (استخراج خودکار از آدرس با DomainUtils) هنگام واردسازی پسوردها از کروم و بیتواردن در تاریخ 2026-09-04 پیاده‌سازی شد.
 - مدیریت دکمه بازگشت گوشی و پشته ناوبری زیرگروه‌ها (BackHandler و navigationStack) و دکمه بازگشت در نوار مسیر (Breadcrumbs) در تاریخ 2026-09-04 پیاده‌سازی شد.
 - قابلیت تولید و نمایش امن کد QR برای فیلدهای نام کاربری، پسورد و فیلدهای سفارشی (بدون کپی شدن در کلیپ‌بورد) در تاریخ 2026-09-04 پیاده‌سازی شد.
+- بازطراحی کارت آیتم پسورد (حذف آیکونهای کپی و QR از روی کارت، عنوان چندخطی با فونت ۱۴، منوی سهنقطه با گزینهٔ جدید «کپی مجدد» و حذف گزینهٔ «نمایش کد QR») بههمراه دیالوگ پرسش طول رمز برای تولید خودکار (بازه ۸ تا ۱۲۸، پیشفرض ۱۶) در تاریخ 2026-11-13 پیادهسازی شد.
+- انتخابگر گروه در فرم پسورد به نمایش درختی با جستجو تبدیل شد و جداسازی دوطرفه خانوادهٔ Chrome Password اعمال گردید (آیتمهای Chrome فقط بین گروههای Chrome جابهجا میشوند و گزینهٔ ریشه برای آنها غیرفعال است؛ سایر آیتمها خانوادهٔ Chrome را در انتخابگر نمیبینند)؛ منطق خالص در util/PasswordGroupTree.kt بههمراه ۱۰ تست واحد جدید در تاریخ 2026-11-13 پیادهسازی و تأیید شد.
+- تست روی گوشی برای ریلیز شامل این دو مرحله در تاریخ 2026-11-13 با موفقیت کامل انجام شد؛ مجموع تستهای واحد پس از این تغییرات: ۴۰ تست سبز.
 ```
 
 ---

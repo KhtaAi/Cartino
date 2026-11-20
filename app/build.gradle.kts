@@ -26,31 +26,106 @@ if (!debugKeystoreFile.exists() && debugKeystoreBase64File.exists()) {
 }
 
 // ---- Release signing policy (AGENTS.md 6.2 / 15.2) ----
-// Release signing MUST come exclusively from CI-injected environment variables
-// (GitHub Secrets). There is NO fallback to the debug keystore and NO hardcoded
-// default passwords. If a release/bundle task is requested while signing env
-// vars are absent, the build FAILS with a clear error instead of silently
-// producing a debug-signed "release" artifact.
-val releaseStorePath = System.getenv("SIGNING_STORE_FILE") ?: System.getenv("KEYSTORE_PATH")
-val hasReleaseSigning = !releaseStorePath.isNullOrBlank()
+// Release signing MUST come exclusively from the four SIGNING_* environment
+// variables (injected from GitHub Secrets in CI). No legacy fallbacks, no
+// fallback to the debug keystore, and no hardcoded default passwords.
+// Validation is enforced at EXECUTION time for release-producing tasks only so
+// debug builds, unit tests, and IDE previews succeed without signing secrets.
+val signingStorePath = providers.environmentVariable("SIGNING_STORE_FILE").orNull?.trim().orEmpty()
+val signingStorePassword = providers.environmentVariable("SIGNING_STORE_PASSWORD").orNull.orEmpty()
+val signingKeyAlias = providers.environmentVariable("SIGNING_KEY_ALIAS").orNull?.trim().orEmpty()
+val signingKeyPassword = providers.environmentVariable("SIGNING_KEY_PASSWORD").orNull.orEmpty()
 
-val requestedTasks = gradle.startParameter.taskNames.joinToString(" ").lowercase()
-val isReleaseRequested = requestedTasks.contains("release") || requestedTasks.contains("bundle")
-if (isReleaseRequested && !hasReleaseSigning) {
-    throw GradleException(
-        "Release signing configuration is missing. " +
-            "Set SIGNING_STORE_FILE, SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS and SIGNING_KEY_PASSWORD " +
-            "(in CI these are injected from GitHub Secrets). " +
-            "Signing a release build with the debug keystore is FORBIDDEN (see AGENTS.md 15.2)."
-    )
+val signingStoreFileObj = if (signingStorePath.isNotEmpty()) file(signingStorePath) else null
+val isSigningStoreFileValid = signingStoreFileObj != null &&
+    signingStoreFileObj.exists() &&
+    signingStoreFileObj.isFile &&
+    signingStoreFileObj.canRead() &&
+    signingStoreFileObj.length() > 0L
+
+val hasReleaseSigning = isSigningStoreFileValid &&
+    signingStorePassword.isNotEmpty() &&
+    signingKeyAlias.isNotEmpty() &&
+    signingKeyPassword.isNotEmpty()
+
+val missingSigningVars = buildList {
+    if (signingStorePath.isEmpty()) add("SIGNING_STORE_FILE")
+    if (signingStorePassword.isEmpty()) add("SIGNING_STORE_PASSWORD")
+    if (signingKeyAlias.isEmpty()) add("SIGNING_KEY_ALIAS")
+    if (signingKeyPassword.isEmpty()) add("SIGNING_KEY_PASSWORD")
+}
+
+val signingStoreFileIssue = when {
+    signingStorePath.isEmpty() -> null
+    signingStoreFileObj == null || !signingStoreFileObj.exists() ->
+        "SIGNING_STORE_FILE does not point to an existing file."
+    !signingStoreFileObj.isFile ->
+        "SIGNING_STORE_FILE does not point to a regular file."
+    !signingStoreFileObj.canRead() ->
+        "SIGNING_STORE_FILE is not readable."
+    signingStoreFileObj.length() <= 0L ->
+        "SIGNING_STORE_FILE is empty (0 bytes)."
+    else -> null
+}
+
+val verifyReleaseSigning = tasks.register("verifyReleaseSigning") {
+    val signingReady = hasReleaseSigning
+    val missingList = missingSigningVars.joinToString(", ")
+    val fileIssue = signingStoreFileIssue
+    doLast {
+        if (!signingReady) {
+            val reasons = buildList {
+                if (missingList.isNotEmpty()) {
+                    add("Missing environment variable(s): $missingList.")
+                }
+                if (fileIssue != null) {
+                    add(fileIssue)
+                }
+            }.joinToString(" ")
+            throw GradleException(
+                "Release signing configuration is missing or invalid. $reasons " +
+                    "Provide all four environment variables: SIGNING_STORE_FILE, " +
+                    "SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD " +
+                    "(in CI, inject them from GitHub Secrets KEYSTORE_BASE64, " +
+                    "KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD). " +
+                    "Falling back to the debug keystore is FORBIDDEN (AGENTS.md 6.2 / 15.2)."
+            )
+        }
+    }
+}
+
+tasks.configureEach {
+    val isReleaseArtifactTask = !name.contains("Debug") &&
+        !name.contains("Test") &&
+        !name.contains("Lint") &&
+        (
+            name == "preReleaseBuild" ||
+                name == "assembleRelease" ||
+                name == "bundleRelease" ||
+                name == "packageReleaseBundle" ||
+                name == "signReleaseBundle" ||
+                name == "validateSigningRelease" ||
+                (name.startsWith("package") && name.endsWith("Release")) ||
+                (name.startsWith("assemble") && name.endsWith("Release")) ||
+                (name.startsWith("bundle") && name.endsWith("Release"))
+            )
+    if (isReleaseArtifactTask) {
+        dependsOn(verifyReleaseSigning)
+    }
 }
 
 android {
     namespace = "com.example"
     compileSdk = 36
 
-    val autoVersionCode = (findProperty("versionCode") as String?)?.toIntOrNull() ?: System.getenv("VERSION_CODE")?.toIntOrNull() ?: project.findProperty("VERSION_CODE")?.toString()?.toIntOrNull() ?: 39
-    val autoVersionName = (findProperty("versionName") as String?) ?: System.getenv("VERSION_NAME") ?: project.findProperty("VERSION_NAME")?.toString() ?: "1.0.39"
+    val autoVersionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull()
+        ?: providers.environmentVariable("VERSION_CODE").orNull?.toIntOrNull()
+        ?: providers.gradleProperty("VERSION_CODE").orNull?.toIntOrNull()
+        ?: 39
+    val autoVersionName = providers.gradleProperty("versionName").orNull?.takeIf { it.isNotBlank() }
+        ?: providers.environmentVariable("VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
+        ?: providers.gradleProperty("VERSION_NAME").orNull?.takeIf { it.isNotBlank() }
+        ?: "1.0.39"
 
     defaultConfig {
         applicationId = "com.aistudio.cartino.app"
@@ -79,13 +154,12 @@ android {
                 keyPassword = "android"
             }
         }
-        create("release") {
-            // Environment-only signing. No debug fallback, no default passwords.
-            if (hasReleaseSigning) {
-                storeFile = file(releaseStorePath!!)
-                storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: System.getenv("STORE_PASSWORD")
-                keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD")
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = signingStoreFileObj
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
             }
         }
     }
@@ -159,6 +233,7 @@ dependencies {
     implementation(libs.zxing.core)
     implementation(libs.bouncycastle.bcprov)
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("net.lingala.zip4j:zip4j:2.11.6")
     implementation(libs.firebase.appcheck.recaptcha)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.core)

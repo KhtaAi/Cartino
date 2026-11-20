@@ -21,9 +21,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Security
@@ -74,7 +74,7 @@ import com.example.ui.screens.CardsScreen
 import com.example.ui.screens.DocumentsScreen
 import com.example.ui.screens.PasswordsScreen
 import com.example.ui.screens.SecuritySettingsScreen
-import com.example.ui.screens.SyncBackupScreen
+import com.example.ui.screens.VaultScreen
 import com.example.ui.theme.EmeraldStatus
 import com.example.ui.theme.GoldPrimary
 import com.example.ui.theme.TextMutedDark
@@ -98,8 +98,8 @@ import androidx.activity.ComponentActivity
 enum class CartinoTab(val titleFa: String) {
     CARDS("کارت‌ها"),
     DOCUMENTS("مدارک"),
+    VAULT("صندوق"),
     PASSWORDS("پسوردها"),
-    SYNC("همگام‌سازی"),
     SETTINGS("تنظیمات")
 }
 
@@ -350,17 +350,17 @@ fun MainScreen(
                             colors = navItemColors
                         )
                         NavigationBarItem(
+                            selected = currentTab == CartinoTab.VAULT,
+                            onClick = { currentTab = CartinoTab.VAULT },
+                            icon = { Icon(Icons.Default.Inventory2, contentDescription = "Vault") },
+                            label = { Text("صندوق") },
+                            colors = navItemColors
+                        )
+                        NavigationBarItem(
                             selected = currentTab == CartinoTab.PASSWORDS,
                             onClick = { currentTab = CartinoTab.PASSWORDS },
                             icon = { Icon(Icons.Default.VpnKey, contentDescription = "Passwords") },
                             label = { Text("پسوردها") },
-                            colors = navItemColors
-                        )
-                        NavigationBarItem(
-                            selected = currentTab == CartinoTab.SYNC,
-                            onClick = { currentTab = CartinoTab.SYNC },
-                            icon = { Icon(Icons.Default.CloudSync, contentDescription = "Sync") },
-                            label = { Text("همگام‌سازی") },
                             colors = navItemColors
                         )
                         NavigationBarItem(
@@ -400,10 +400,10 @@ fun MainScreen(
                                 viewModel.deleteDocumentGroupCascade(group, onSuccess, onError)
                             }
                         )
-                        CartinoTab.PASSWORDS -> PasswordsScreen(
+                        CartinoTab.VAULT -> VaultScreen(
                             viewModel = viewModel
                         )
-                        CartinoTab.SYNC -> SyncBackupScreen(
+                        CartinoTab.PASSWORDS -> PasswordsScreen(
                             viewModel = viewModel
                         )
                         CartinoTab.SETTINGS -> SecuritySettingsScreen(

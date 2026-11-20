@@ -3,8 +3,12 @@ package com.example.ui
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.File
+import java.util.UUID
 import com.example.data.local.CartinoDatabase
 import com.example.data.model.BankCard
 import com.example.data.model.DocumentGroup
@@ -13,12 +17,22 @@ import com.example.data.model.IdentityDocument
 import com.example.data.model.PasswordGroup
 import com.example.data.model.PasswordEntry
 import com.example.data.model.GeneratedPasswordHistory
+import com.example.data.model.VaultFile
+import com.example.data.model.VaultGroup
+import com.example.util.ArchiveResult
 import com.example.util.BackupSyncManager
+import com.example.util.ExportResult
 import com.example.util.IranianBankHelper
+import com.example.util.OrphanCleanupResult
 import com.example.util.ParsedCardData
 import com.example.util.SyncLogger
 import com.example.util.TotpManager
 import com.example.util.DomainUtils
+import com.example.util.VaultArchiveGroupMetadata
+import com.example.util.VaultArchiveManifest
+import com.example.util.VaultArchiveManager
+import com.example.util.VaultStorageManager
+import com.example.util.VaultZipExporter
 import com.example.util.WebDavConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -63,12 +77,57 @@ data class PasswordImportReport(
     val archivedCount: Int = 0
 )
 
+enum class VaultDuplicateAction {
+    SKIP,
+    KEEP
+}
+
+data class VaultDuplicateCandidate(
+    val fileName: String,
+    val sha256: String,
+    val sizeBytes: Long,
+    val existingFile: VaultFile
+)
+
+data class VaultImportReport(
+    val importedCount: Int,
+    val duplicateSkippedCount: Int,
+    val duplicateKeptCount: Int,
+    val rejectedCount: Int,
+    val totalImportedBytes: Long,
+    val messages: List<String> = emptyList()
+)
+
+enum class MergeStrategy {
+    ASK_USER,
+    SKIP_DUPLICATES,
+    REPLACE_DUPLICATES,
+    RENAME_DUPLICATES
+}
+
+data class VaultArchiveMergeConflict(
+    val duplicateGroupsCount: Int,
+    val duplicateFilesCount: Int
+)
+
+data class VaultImportArchiveReport(
+    val totalGroups: Int,
+    val newGroups: Int,
+    val reusedGroups: Int,
+    val totalFiles: Int,
+    val newFiles: Int,
+    val skippedFiles: Int,
+    val replacedFiles: Int,
+    val renamedFiles: Int
+)
+
 class CartinoViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = CartinoDatabase.getDatabase(application)
     private val cardDao = db.bankCardDao()
     private val docDao = db.identityDocumentDao()
     private val passwordDao = db.passwordDao()
+    private val vaultDao = db.vaultDao()
 
     private val plainPrefs = application.getSharedPreferences("cartino_prefs", android.content.Context.MODE_PRIVATE)
 
@@ -204,6 +263,34 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val documentGroups: StateFlow<List<DocumentGroup>> = allDocumentGroups
+
+    val allVaultGroups: StateFlow<List<VaultGroup>> = vaultDao.getAllGroups()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allVaultFiles: StateFlow<List<VaultFile>> = vaultDao.getAllFiles()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _vaultBackupTrigger = MutableStateFlow(System.currentTimeMillis())
+
+    val isVaultUnbackedUp: StateFlow<Boolean> = combine(
+        allVaultGroups,
+        allVaultFiles,
+        _vaultBackupTrigger
+    ) { groups, files, _ ->
+        if (groups.isEmpty() && files.isEmpty()) {
+            false
+        } else {
+            val lastVaultBackup = plainPrefs.getLong("last_vault_backup_timestamp", 0L)
+            if (lastVaultBackup == 0L) {
+                true
+            } else {
+                val latestGroupChange = groups.maxOfOrNull { it.createdAt } ?: 0L
+                val latestFileChange = files.maxOfOrNull { maxOf(it.createdAt, it.updatedAt) } ?: 0L
+                val latestVaultChange = maxOf(latestGroupChange, latestFileChange)
+                latestVaultChange > lastVaultBackup
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     private val _isLoadingPasswords = MutableStateFlow(false)
     val isLoadingPasswords: StateFlow<Boolean> = _isLoadingPasswords.asStateFlow()
@@ -650,6 +737,972 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         onError: (String) -> Unit = {}
     ) {
         deleteDocumentGroupCascade(group.id, onSuccess, onError)
+    }
+
+    // ==========================================
+    // Vault Operations (Groups, Files, Cascade, Orphan Cleanup)
+    // ==========================================
+
+    fun addOrUpdateVaultGroup(group: VaultGroup) {
+        viewModelScope.launch(Dispatchers.IO) {
+            vaultDao.insertGroup(group)
+        }
+    }
+
+    fun updateVaultFileMetadata(file: VaultFile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            vaultDao.updateFile(file.copy(updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    internal suspend fun updateVaultFileMetadataInternal(
+        fileId: String,
+        newDisplayName: String,
+        newNotes: String,
+        newGroupId: String?
+    ): VaultFile? {
+        val existing = vaultDao.getFileById(fileId) ?: return null
+        val sanitizedName = newDisplayName.trim().ifBlank { existing.displayName }
+        val updated = existing.copy(
+            displayName = sanitizedName,
+            notes = newNotes.trim(),
+            groupId = newGroupId,
+            updatedAt = System.currentTimeMillis()
+        )
+        vaultDao.updateFile(updated)
+        SyncLogger.log("VAULT", "متادیتای فایل صندوق به‌روزرسانی شد (شناسه: ${fileId.take(8)})")
+        return updated
+    }
+
+    fun updateVaultFileMetadata(
+        fileId: String,
+        newDisplayName: String,
+        newNotes: String,
+        newGroupId: String?,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val updated = updateVaultFileMetadataInternal(
+                    fileId = fileId,
+                    newDisplayName = newDisplayName,
+                    newNotes = newNotes,
+                    newGroupId = newGroupId
+                )
+                if (updated != null) {
+                    withContext(Dispatchers.Main) { onSuccess() }
+                } else {
+                    withContext(Dispatchers.Main) { onError("فایل مورد نظر در صندوق یافت نشد") }
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در به‌روزرسانی متادیتای فایل صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در ذخیره تغییرات فایل: ${e.localizedMessage ?: "خطای نامشخص"}")
+                }
+            }
+        }
+    }
+
+    internal suspend fun importVaultFilesInternal(
+        uris: List<Uri>,
+        currentGroupId: String?,
+        onDuplicatePrompt: (suspend (VaultDuplicateCandidate) -> VaultDuplicateAction)? = null
+    ): VaultImportReport {
+        val appContext = getApplication<Application>().applicationContext
+        val resolver = appContext.contentResolver
+
+        var importedCount = 0
+        var duplicateSkippedCount = 0
+        var duplicateKeptCount = 0
+        var rejectedCount = 0
+        var totalImportedBytes = 0L
+        val messages = mutableListOf<String>()
+
+        for (uri in uris) {
+            var displayName: String? = null
+            var reportedSizeBytes = -1L
+
+            runCatching {
+                resolver.query(
+                    uri,
+                    arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIdx >= 0) {
+                            displayName = cursor.getString(nameIdx)?.takeIf { it.isNotBlank() }
+                        }
+                        val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                            reportedSizeBytes = cursor.getLong(sizeIdx)
+                        }
+                    }
+                }
+            }
+
+            val resolvedFileName = displayName
+                ?: uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                ?: "فایل بی‌نام"
+            val resolvedMimeType = resolver.getType(uri)?.takeIf { it.isNotBlank() }
+                ?: "application/octet-stream"
+
+            if (reportedSizeBytes > VaultStorageManager.DEFAULT_MAX_FILE_SIZE_BYTES) {
+                rejectedCount++
+                messages.add("فایل «$resolvedFileName» بیش از سقف مجاز 100 مگابایت است")
+                continue
+            }
+
+            val existingTotalBytes = vaultDao.getTotalSizeBytes()
+            val availableSpaceBytes = VaultStorageManager.getAvailableSpaceBytes(appContext)
+            if (reportedSizeBytes > 0L && (existingTotalBytes + reportedSizeBytes) > availableSpaceBytes) {
+                rejectedCount++
+                messages.add("ظرفیت باقیمانده صندوق برای فایل «$resolvedFileName» کافی نیست")
+                continue
+            }
+
+            val importResult = try {
+                VaultStorageManager.importFromUri(
+                    context = appContext,
+                    uri = uri,
+                    maxFileSizeBytes = VaultStorageManager.DEFAULT_MAX_FILE_SIZE_BYTES
+                )
+            } catch (t: Throwable) {
+                rejectedCount++
+                val reason = t.localizedMessage ?: "خطا در رمزنگاری و کپی فایل"
+                messages.add("«$resolvedFileName»: $reason")
+                SyncLogger.log("VAULT", "رد وارد کردن فایل صندوق ($resolvedFileName): $reason")
+                continue
+            }
+
+            if ((existingTotalBytes + importResult.sizeBytes) > availableSpaceBytes) {
+                VaultStorageManager.deleteEncryptedFile(appContext, importResult.storageName)
+                rejectedCount++
+                messages.add("ظرفیت باقیمانده صندوق برای فایل «$resolvedFileName» کافی نیست")
+                continue
+            }
+
+            val existingDuplicate = vaultDao.findFileBySha256InGroup(importResult.sha256, currentGroupId)
+            if (existingDuplicate != null) {
+                val action = onDuplicatePrompt?.invoke(
+                    VaultDuplicateCandidate(
+                        fileName = resolvedFileName,
+                        sha256 = importResult.sha256,
+                        sizeBytes = importResult.sizeBytes,
+                        existingFile = existingDuplicate
+                    )
+                ) ?: VaultDuplicateAction.SKIP
+
+                if (action == VaultDuplicateAction.SKIP) {
+                    VaultStorageManager.deleteEncryptedFile(appContext, importResult.storageName)
+                    duplicateSkippedCount++
+                    continue
+                } else {
+                    duplicateKeptCount++
+                }
+            }
+
+            val now = System.currentTimeMillis()
+            val newVaultFile = VaultFile(
+                id = UUID.randomUUID().toString(),
+                groupId = currentGroupId,
+                displayName = resolvedFileName,
+                originalFileName = resolvedFileName,
+                mimeType = resolvedMimeType,
+                sizeBytes = importResult.sizeBytes,
+                sha256 = importResult.sha256,
+                storageName = importResult.storageName,
+                encryptionVersion = importResult.encryptionVersion,
+                notes = "",
+                createdAt = now,
+                updatedAt = now
+            )
+            vaultDao.insertFile(newVaultFile)
+            importedCount++
+            totalImportedBytes += importResult.sizeBytes
+        }
+
+        SyncLogger.log(
+            "VAULT",
+            "پایان وارد کردن فایل به صندوق: $importedCount موفق، $duplicateSkippedCount تکراری ردشده، $rejectedCount ردشده"
+        )
+
+        return VaultImportReport(
+            importedCount = importedCount,
+            duplicateSkippedCount = duplicateSkippedCount,
+            duplicateKeptCount = duplicateKeptCount,
+            rejectedCount = rejectedCount,
+            totalImportedBytes = totalImportedBytes,
+            messages = messages
+        )
+    }
+
+    fun importVaultFiles(
+        uris: List<Uri>,
+        currentGroupId: String?,
+        onSuccess: (VaultImportReport) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        importVaultFiles(
+            uris = uris,
+            currentGroupId = currentGroupId,
+            onDuplicatePrompt = null,
+            onSuccess = onSuccess,
+            onError = onError
+        )
+    }
+
+    fun importVaultFiles(
+        uris: List<Uri>,
+        currentGroupId: String?,
+        onDuplicatePrompt: (suspend (VaultDuplicateCandidate) -> VaultDuplicateAction)?,
+        onSuccess: (VaultImportReport) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val report = importVaultFilesInternal(
+                    uris = uris,
+                    currentGroupId = currentGroupId,
+                    onDuplicatePrompt = onDuplicatePrompt
+                )
+                withContext(Dispatchers.Main) {
+                    onSuccess(report)
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در فرآیند وارد کردن فایل‌های صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در وارد کردن فایل‌ها: ${e.localizedMessage ?: "خطای نامشخص"}")
+                }
+            }
+        }
+    }
+
+    internal suspend fun exportVaultFileInternal(
+        file: VaultFile,
+        targetUri: Uri
+    ): ExportResult {
+        val appContext = getApplication<Application>().applicationContext
+        val dbRecord = vaultDao.getFileById(file.id) ?: file
+        val result = VaultStorageManager.exportToUri(
+            context = appContext,
+            storageName = dbRecord.storageName,
+            targetUri = targetUri,
+            expectedSha256 = dbRecord.sha256
+        )
+        if (result.success) {
+            SyncLogger.log(
+                "VAULT",
+                "خروجی فایل صندوق با موفقیت و تأیید SHA-256 انجام شد (شناسه: ${dbRecord.id.take(8)})"
+            )
+        } else {
+            SyncLogger.log(
+                "VAULT",
+                "خروجی فایل صندوق ناموفق بود (شناسه: ${dbRecord.id.take(8)}): ${result.errorMessage}"
+            )
+        }
+        return result
+    }
+
+    fun exportVaultFile(
+        file: VaultFile,
+        targetUri: Uri,
+        onSuccess: (ExportResult) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = exportVaultFileInternal(file = file, targetUri = targetUri)
+                withContext(Dispatchers.Main) {
+                    if (result.success) {
+                        onSuccess(result)
+                    } else {
+                        onError(result.errorMessage ?: "یکپارچگی فایل تأیید نشد")
+                    }
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در خروجی گرفتن فایل صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در خروجی گرفتن فایل: ${e.localizedMessage ?: "خطای نامشخص"}")
+                }
+            }
+        }
+    }
+
+    fun exportVaultFile(
+        fileId: String,
+        targetUri: Uri,
+        onSuccess: (ExportResult) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val record = vaultDao.getFileById(fileId)
+                if (record == null) {
+                    withContext(Dispatchers.Main) {
+                        onError("فایل مورد نظر در صندوق یافت نشد")
+                    }
+                    return@launch
+                }
+                val result = exportVaultFileInternal(file = record, targetUri = targetUri)
+                withContext(Dispatchers.Main) {
+                    if (result.success) {
+                        onSuccess(result)
+                    } else {
+                        onError(result.errorMessage ?: "یکپارچگی فایل تأیید نشد")
+                    }
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در خروجی گرفتن فایل صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در خروجی گرفتن فایل: ${e.localizedMessage ?: "خطای نامشخص"}")
+                }
+            }
+        }
+    }
+
+    internal suspend fun exportVaultGroupAsZipInternal(
+        groupId: String,
+        targetUri: Uri,
+        zipPassword: CharArray
+    ): ExportResult {
+        return VaultZipExporter.exportGroupToZip(
+            context = getApplication<Application>().applicationContext,
+            groupId = groupId,
+            targetUri = targetUri,
+            zipPassword = zipPassword
+        )
+    }
+
+    fun exportVaultGroupAsZip(
+        groupId: String,
+        targetUri: Uri,
+        zipPassword: CharArray,
+        onSuccess: (ExportResult) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val passwordCopy = zipPassword.copyOf()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = exportVaultGroupAsZipInternal(
+                    groupId = groupId,
+                    targetUri = targetUri,
+                    zipPassword = passwordCopy
+                )
+                withContext(Dispatchers.Main) {
+                    if (result.success) {
+                        onSuccess(result)
+                    } else {
+                        onError(result.errorMessage ?: "خطا در خروجی ZIP گروه")
+                    }
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در خروجی ZIP گروه صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در خروجی ZIP گروه: ${e.localizedMessage ?: "خطای نامشخص"}")
+                }
+            } finally {
+                passwordCopy.fill('\u0000')
+            }
+        }
+    }
+
+    internal suspend fun exportVaultArchiveInternal(
+        targetUri: Uri,
+        password: CharArray,
+        totpCode: String? = null
+    ): ArchiveResult {
+        val result = VaultArchiveManager.createVaultArchive(
+            context = getApplication<Application>().applicationContext,
+            targetUri = targetUri,
+            password = password,
+            totpCode = totpCode
+        )
+        if (result.success) {
+            plainPrefs.edit()
+                .putLong("last_vault_backup_timestamp", System.currentTimeMillis())
+                .commit()
+            _vaultBackupTrigger.value = System.currentTimeMillis()
+        }
+        return result
+    }
+
+    fun exportVaultArchive(
+        targetUri: Uri,
+        password: CharArray,
+        totpCode: String? = null,
+        onSuccess: (ArchiveResult) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val passwordCopy = password.copyOf()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = exportVaultArchiveInternal(
+                    targetUri = targetUri,
+                    password = passwordCopy,
+                    totpCode = totpCode
+                )
+                withContext(Dispatchers.Main) {
+                    val appContext = getApplication<Application>().applicationContext
+                    if (result.success) {
+                        Toast.makeText(
+                            appContext,
+                            "بک‌آپ صندوق با \u2068${result.totalGroups}\u2069 گروه و \u2068${result.totalFiles}\u2069 فایل ساخته شد",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        onSuccess(result)
+                    } else {
+                        val errMsg = result.errorMessage ?: "خطا در ساخت آرشیو صندوق"
+                        Toast.makeText(appContext, errMsg, Toast.LENGTH_LONG).show()
+                        onError(errMsg)
+                    }
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT_ARCHIVE", "خطا در ساخت آرشیو صندوق: ${e.message}")
+                val errMsg = "خطا در ساخت آرشیو صندوق: ${e.localizedMessage ?: "خطای نامشخص"}"
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        getApplication<Application>().applicationContext,
+                        errMsg,
+                        Toast.LENGTH_LONG
+                    ).show()
+                    onError(errMsg)
+                }
+            } finally {
+                passwordCopy.fill('\u0000')
+            }
+        }
+    }
+
+    internal suspend fun importVaultArchiveInternal(
+        sourceUri: Uri,
+        password: CharArray,
+        totpCode: String? = null,
+        mergeStrategy: MergeStrategy = MergeStrategy.ASK_USER,
+        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
+        onMergeConflict: (suspend (VaultArchiveMergeConflict) -> MergeStrategy)? = null
+    ): VaultImportArchiveReport {
+        val appContext = getApplication<Application>().applicationContext
+        val restoreResult = VaultArchiveManager.restoreVaultArchive(
+            context = appContext,
+            sourceUri = sourceUri,
+            password = password,
+            totpCode = totpCode,
+            onProgress = onProgress
+        )
+
+        if (!restoreResult.success || restoreResult.manifest == null) {
+            throw IllegalStateException(restoreResult.errorMessage ?: "خطا در بازیابی آرشیو صندوق")
+        }
+
+        val manifest = restoreResult.manifest
+        val remainingStaged = restoreResult.restoredStorageNames.values.toMutableSet()
+
+        fun cleanupUnusedStagedFiles() {
+            for (storage in remainingStaged) {
+                VaultStorageManager.deleteEncryptedFile(appContext, storage)
+            }
+            remainingStaged.clear()
+        }
+
+        try {
+            val orderedGroups = sortVaultArchiveGroupsParentFirst(manifest.groups)
+
+            // Detect potential duplicates before modifying DB
+            val simulatedGroupMap = mutableMapOf<String, String?>()
+            var detectedDuplicateGroups = 0
+            for ((grp, isOrphanFallback) in orderedGroups) {
+                val mappedParentId = if (isOrphanFallback) null else grp.parentGroupId?.let { simulatedGroupMap[it] }
+                val existing = if (!isOrphanFallback && grp.parentGroupId != null && mappedParentId == null) {
+                    null
+                } else {
+                    vaultDao.findGroupByNameAndParent(grp.name.trim(), mappedParentId)
+                }
+                if (existing != null) {
+                    simulatedGroupMap[grp.id] = existing.id
+                    detectedDuplicateGroups++
+                } else {
+                    simulatedGroupMap[grp.id] = null
+                }
+            }
+
+            val cachedSimulatedFilesByGroup = mutableMapOf<String?, List<VaultFile>>()
+            var detectedDuplicateFiles = 0
+            for (file in manifest.files) {
+                val targetGroupId: String?
+                val groupExistsInDb: Boolean
+                if (file.groupId == null) {
+                    targetGroupId = null
+                    groupExistsInDb = true
+                } else {
+                    targetGroupId = simulatedGroupMap[file.groupId]
+                    groupExistsInDb = targetGroupId != null
+                }
+                if (groupExistsInDb) {
+                    val existingFiles = cachedSimulatedFilesByGroup.getOrPut(targetGroupId) {
+                        vaultDao.getFilesListByGroupId(targetGroupId)
+                    }
+                    if (existingFiles.any { it.displayName.trim().equals(file.displayName.trim(), ignoreCase = true) }) {
+                        detectedDuplicateFiles++
+                    }
+                }
+            }
+
+            val effectiveStrategy = if ((detectedDuplicateGroups > 0 || detectedDuplicateFiles > 0) &&
+                mergeStrategy == MergeStrategy.ASK_USER
+            ) {
+                val resolved = onMergeConflict?.invoke(
+                    VaultArchiveMergeConflict(
+                        duplicateGroupsCount = detectedDuplicateGroups,
+                        duplicateFilesCount = detectedDuplicateFiles
+                    )
+                )
+                if (resolved == null || resolved == MergeStrategy.ASK_USER) {
+                    cleanupUnusedStagedFiles()
+                    throw IllegalStateException("موارد تکراری یافت شد؛ لطفاً استراتژی ادغام را انتخاب کنید")
+                }
+                resolved
+            } else {
+                mergeStrategy
+            }
+
+            var newGroupsCount = 0
+            var reusedGroupsCount = 0
+            val groupIdMap = mutableMapOf<String, String>()
+
+            var newFilesCount = 0
+            var skippedFilesCount = 0
+            var replacedFilesCount = 0
+            var renamedFilesCount = 0
+
+            db.withTransaction {
+                // 1. Merge / Create groups in strict parent-before-child topological order
+                for ((grp, isOrphanFallback) in orderedGroups) {
+                    val mappedParentId = if (isOrphanFallback) {
+                        null
+                    } else {
+                        grp.parentGroupId?.let { groupIdMap[it] }
+                    }
+                    val existingGroup = vaultDao.findGroupByNameAndParent(grp.name.trim(), mappedParentId)
+                    if (existingGroup != null) {
+                        groupIdMap[grp.id] = existingGroup.id
+                        reusedGroupsCount++
+                    } else {
+                        val newGroup = VaultGroup(
+                            id = UUID.randomUUID().toString(),
+                            name = grp.name.trim(),
+                            parentGroupId = mappedParentId,
+                            createdAt = grp.createdAt
+                        )
+                        vaultDao.insertGroup(newGroup)
+                        groupIdMap[grp.id] = newGroup.id
+                        newGroupsCount++
+                    }
+                }
+
+                // 2. Merge / Insert files according to effectiveStrategy
+                val filesByGroupCache = mutableMapOf<String?, MutableList<VaultFile>>()
+                for (manifestFile in manifest.files) {
+                    val mappedGroupId = manifestFile.groupId?.let { groupIdMap[it] ?: it }
+                    val stagedStorageName = restoreResult.restoredStorageNames[manifestFile.storageName]
+                        ?: throw IllegalStateException("فایل رمزگشایی‌شده برای «${manifestFile.displayName}» یافت نشد")
+
+                    val existingFiles = filesByGroupCache.getOrPut(mappedGroupId) {
+                        vaultDao.getFilesListByGroupId(mappedGroupId).toMutableList()
+                    }
+                    val existingMatch = existingFiles.firstOrNull {
+                        it.displayName.trim().equals(manifestFile.displayName.trim(), ignoreCase = true)
+                    }
+
+                    if (existingMatch == null) {
+                        val newFile = VaultFile(
+                            id = UUID.randomUUID().toString(),
+                            groupId = mappedGroupId,
+                            displayName = manifestFile.displayName,
+                            originalFileName = manifestFile.originalFileName,
+                            mimeType = manifestFile.mimeType,
+                            sizeBytes = manifestFile.sizeBytes,
+                            sha256 = manifestFile.sha256,
+                            storageName = stagedStorageName,
+                            encryptionVersion = VaultStorageManager.ENCRYPTION_VERSION,
+                            notes = manifestFile.notes,
+                            createdAt = manifestFile.createdAt,
+                            updatedAt = manifestFile.updatedAt
+                        )
+                        vaultDao.insertFile(newFile)
+                        existingFiles.add(newFile)
+                        remainingStaged.remove(stagedStorageName)
+                        newFilesCount++
+                    } else {
+                        when (effectiveStrategy) {
+                            MergeStrategy.SKIP_DUPLICATES, MergeStrategy.ASK_USER -> {
+                                VaultStorageManager.deleteEncryptedFile(appContext, stagedStorageName)
+                                remainingStaged.remove(stagedStorageName)
+                                skippedFilesCount++
+                            }
+                            MergeStrategy.REPLACE_DUPLICATES -> {
+                                vaultDao.deleteFileById(existingMatch.id)
+                                existingFiles.remove(existingMatch)
+                                if (existingMatch.storageName != stagedStorageName) {
+                                    VaultStorageManager.deleteEncryptedFile(appContext, existingMatch.storageName)
+                                }
+                                val replacement = VaultFile(
+                                    id = UUID.randomUUID().toString(),
+                                    groupId = mappedGroupId,
+                                    displayName = manifestFile.displayName,
+                                    originalFileName = manifestFile.originalFileName,
+                                    mimeType = manifestFile.mimeType,
+                                    sizeBytes = manifestFile.sizeBytes,
+                                    sha256 = manifestFile.sha256,
+                                    storageName = stagedStorageName,
+                                    encryptionVersion = VaultStorageManager.ENCRYPTION_VERSION,
+                                    notes = manifestFile.notes,
+                                    createdAt = manifestFile.createdAt,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                                vaultDao.insertFile(replacement)
+                                existingFiles.add(replacement)
+                                remainingStaged.remove(stagedStorageName)
+                                replacedFilesCount++
+                            }
+                            MergeStrategy.RENAME_DUPLICATES -> {
+                                val uniqueName = resolveUniqueVaultDisplayName(
+                                    desiredName = manifestFile.displayName,
+                                    existingFiles = existingFiles
+                                )
+                                val renamedFile = VaultFile(
+                                    id = UUID.randomUUID().toString(),
+                                    groupId = mappedGroupId,
+                                    displayName = uniqueName,
+                                    originalFileName = manifestFile.originalFileName,
+                                    mimeType = manifestFile.mimeType,
+                                    sizeBytes = manifestFile.sizeBytes,
+                                    sha256 = manifestFile.sha256,
+                                    storageName = stagedStorageName,
+                                    encryptionVersion = VaultStorageManager.ENCRYPTION_VERSION,
+                                    notes = manifestFile.notes,
+                                    createdAt = manifestFile.createdAt,
+                                    updatedAt = manifestFile.updatedAt
+                                )
+                                vaultDao.insertFile(renamedFile)
+                                existingFiles.add(renamedFile)
+                                remainingStaged.remove(stagedStorageName)
+                                renamedFilesCount++
+                            }
+                        }
+                    }
+                }
+            }
+
+            plainPrefs.edit()
+                .putLong("last_vault_backup_timestamp", System.currentTimeMillis())
+                .commit()
+            _vaultBackupTrigger.value = System.currentTimeMillis()
+
+            val report = VaultImportArchiveReport(
+                totalGroups = manifest.groups.size,
+                newGroups = newGroupsCount,
+                reusedGroups = reusedGroupsCount,
+                totalFiles = manifest.files.size,
+                newFiles = newFilesCount,
+                skippedFiles = skippedFilesCount,
+                replacedFiles = replacedFilesCount,
+                renamedFiles = renamedFilesCount
+            )
+            SyncLogger.log(
+                "VAULT_ARCHIVE",
+                "بازیابی آرشیو صندوق تکمیل شد: $newFilesCount جدید، $replacedFilesCount جایگزین، $renamedFilesCount تغییرنام‌یافته، $skippedFilesCount ردشده"
+            )
+            return report
+        } catch (t: Throwable) {
+            cleanupUnusedStagedFiles()
+            throw t
+        }
+    }
+
+    fun importVaultArchive(
+        sourceUri: Uri,
+        password: CharArray,
+        totpCode: String? = null,
+        mergeStrategy: MergeStrategy = MergeStrategy.ASK_USER,
+        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
+        onSuccess: (VaultImportArchiveReport) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        importVaultArchive(
+            sourceUri = sourceUri,
+            password = password,
+            totpCode = totpCode,
+            mergeStrategy = mergeStrategy,
+            onProgress = onProgress,
+            onMergeConflict = null,
+            onSuccess = onSuccess,
+            onError = onError
+        )
+    }
+
+    fun importVaultArchive(
+        sourceUri: Uri,
+        password: CharArray,
+        totpCode: String? = null,
+        mergeStrategy: MergeStrategy = MergeStrategy.ASK_USER,
+        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> },
+        onMergeConflict: (suspend (VaultArchiveMergeConflict) -> MergeStrategy)? = null,
+        onSuccess: (VaultImportArchiveReport) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val passwordCopy = password.copyOf()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val report = importVaultArchiveInternal(
+                    sourceUri = sourceUri,
+                    password = passwordCopy,
+                    totpCode = totpCode,
+                    mergeStrategy = mergeStrategy,
+                    onProgress = { cur, total ->
+                        viewModelScope.launch(Dispatchers.Main) {
+                            onProgress(cur, total)
+                        }
+                    },
+                    onMergeConflict = onMergeConflict
+                )
+                withContext(Dispatchers.Main) {
+                    onSuccess(report)
+                }
+            } catch (e: Throwable) {
+                val errMsg = e.localizedMessage?.takeIf { it.isNotBlank() }
+                    ?: "خطا در بازیابی آرشیو صندوق"
+                SyncLogger.log("VAULT_ARCHIVE", "خطا در importVaultArchive: $errMsg")
+                withContext(Dispatchers.Main) {
+                    onError(errMsg)
+                }
+            } finally {
+                passwordCopy.fill('\u0000')
+            }
+        }
+    }
+
+    private fun sortVaultArchiveGroupsParentFirst(
+        groups: List<VaultArchiveGroupMetadata>
+    ): List<Pair<VaultArchiveGroupMetadata, Boolean>> {
+        val remaining = groups.sortedWith(
+            compareBy<VaultArchiveGroupMetadata> { it.createdAt }.thenBy { it.name.lowercase() }
+        ).toMutableList()
+        val resolvedIds = mutableSetOf<String>()
+        val ordered = mutableListOf<Pair<VaultArchiveGroupMetadata, Boolean>>()
+
+        while (remaining.isNotEmpty()) {
+            val iter = remaining.iterator()
+            var progressed = false
+            while (iter.hasNext()) {
+                val grp = iter.next()
+                if (grp.parentGroupId == null || resolvedIds.contains(grp.parentGroupId)) {
+                    ordered.add(grp to false)
+                    resolvedIds.add(grp.id)
+                    iter.remove()
+                    progressed = true
+                }
+            }
+            if (!progressed && remaining.isNotEmpty()) {
+                val orphan = remaining.removeAt(0)
+                ordered.add(orphan to true)
+                resolvedIds.add(orphan.id)
+            }
+        }
+        return ordered
+    }
+
+    private fun resolveUniqueVaultDisplayName(
+        desiredName: String,
+        existingFiles: List<VaultFile>
+    ): String {
+        val usedLower = existingFiles.map { it.displayName.trim().lowercase() }.toSet()
+        val base = desiredName.trim().ifBlank { "فایل بی‌نام" }
+        if (!usedLower.contains(base.lowercase())) return base
+
+        val dotIndex = base.lastIndexOf('.')
+        val (stem, ext) = if (dotIndex > 0) {
+            base.substring(0, dotIndex) to base.substring(dotIndex)
+        } else {
+            base to ""
+        }
+        var counter = 1
+        while (true) {
+            val candidate = "$stem ($counter)$ext"
+            if (!usedLower.contains(candidate.lowercase())) {
+                return candidate
+            }
+            counter++
+        }
+    }
+
+    suspend fun inspectVaultArchiveFromUri(
+        uri: Uri,
+        password: CharArray,
+        totpCode: String? = null
+    ): VaultArchiveManifest? = withContext(Dispatchers.IO) {
+        try {
+            VaultArchiveManager.inspectVaultArchive(
+                context = getApplication<Application>().applicationContext,
+                sourceUri = uri,
+                password = password,
+                totpCode = totpCode
+            )
+        } catch (e: Throwable) {
+            SyncLogger.log("VAULT_ARCHIVE", "خطا در inspectVaultArchiveFromUri: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun hasVaultArchiveDuplicates(manifest: VaultArchiveManifest): Boolean = withContext(Dispatchers.IO) {
+        val orderedGroups = sortVaultArchiveGroupsParentFirst(manifest.groups)
+        val simulatedGroupMap = mutableMapOf<String, String?>()
+        var hasDuplicates = false
+
+        for ((grp, isOrphanFallback) in orderedGroups) {
+            val mappedParentId = if (isOrphanFallback) null else grp.parentGroupId?.let { simulatedGroupMap[it] }
+            val existing = if (!isOrphanFallback && grp.parentGroupId != null && mappedParentId == null) {
+                null
+            } else {
+                vaultDao.findGroupByNameAndParent(grp.name.trim(), mappedParentId)
+            }
+            if (existing != null) {
+                simulatedGroupMap[grp.id] = existing.id
+                hasDuplicates = true
+            } else {
+                simulatedGroupMap[grp.id] = null
+            }
+        }
+
+        if (hasDuplicates) return@withContext true
+
+        val cachedFiles = mutableMapOf<String?, List<VaultFile>>()
+        for (file in manifest.files) {
+            val targetGroupId: String? = if (file.groupId == null) null else simulatedGroupMap[file.groupId]
+            val existingFiles = cachedFiles.getOrPut(targetGroupId) {
+                vaultDao.getFilesListByGroupId(targetGroupId)
+            }
+            if (existingFiles.any { it.displayName.trim().equals(file.displayName.trim(), ignoreCase = true) }) {
+                return@withContext true
+            }
+        }
+
+        false
+    }
+
+    fun deleteVaultFile(
+        file: VaultFile,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                vaultDao.deleteFileById(file.id)
+                VaultStorageManager.deleteEncryptedFile(getApplication(), file.storageName)
+                SyncLogger.log("VAULT", "فایل صندوق حذف شد (شناسه: ${file.id.take(8)})")
+                withContext(Dispatchers.Main) {
+                    onSuccess()
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در حذف فایل صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در حذف فایل صندوق: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
+
+    internal suspend fun deleteVaultGroupCascadeInternal(groupId: String): Pair<Int, Long> {
+        val allGroups = vaultDao.getAllGroupsList()
+        val visited = mutableSetOf<String>()
+
+        fun collectDescendantIds(parentId: String): List<String> {
+            if (!visited.add(parentId)) return emptyList()
+            val children = allGroups.filter { it.parentGroupId == parentId }
+            val result = mutableListOf<String>()
+            for (child in children) {
+                result.addAll(collectDescendantIds(child.id))
+                result.add(child.id)
+            }
+            return result
+        }
+
+        val groupsToDelete = collectDescendantIds(groupId) + groupId
+        var deletedFilesCount = 0
+        var freedBytes = 0L
+
+        for (gId in groupsToDelete) {
+            val filesInGroup = vaultDao.getFilesListByGroupId(gId)
+            for (file in filesInGroup) {
+                val diskBytes = VaultStorageManager.getEncryptedFileSizeBytes(getApplication(), file.storageName)
+                VaultStorageManager.deleteEncryptedFile(getApplication(), file.storageName)
+                deletedFilesCount++
+                freedBytes += if (diskBytes > 0L) diskBytes else file.sizeBytes
+            }
+            vaultDao.deleteFilesByGroupId(gId)
+            vaultDao.deleteGroupById(gId)
+        }
+
+        SyncLogger.log(
+            "VAULT",
+            "حذف آبشاری گروه صندوق انجام شد ($deletedFilesCount فایل، $freedBytes بایت آزاد شد)"
+        )
+        return deletedFilesCount to freedBytes
+    }
+
+    fun deleteVaultGroupCascade(
+        groupId: String,
+        onSuccess: (deletedFilesCount: Int, freedBytes: Long) -> Unit = { _, _ -> },
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val (deletedFilesCount, freedBytes) = deleteVaultGroupCascadeInternal(groupId)
+                withContext(Dispatchers.Main) {
+                    onSuccess(deletedFilesCount, freedBytes)
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در حذف آبشاری گروه صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در حذف گروه صندوق: ${e.localizedMessage}")
+                }
+            }
+        }
+    }
+
+    fun deleteVaultGroupCascade(
+        group: VaultGroup,
+        onSuccess: (deletedFilesCount: Int, freedBytes: Long) -> Unit = { _, _ -> },
+        onError: (String) -> Unit = {}
+    ) {
+        deleteVaultGroupCascade(group.id, onSuccess, onError)
+    }
+
+    internal suspend fun cleanupOrphanVaultFilesInternal(): OrphanCleanupResult {
+        val validStorageNames = vaultDao.getAllStorageNames().toSet()
+        return VaultStorageManager.cleanupOrphanFiles(getApplication(), validStorageNames)
+    }
+
+    fun cleanupOrphanVaultFiles(
+        onSuccess: (deletedCount: Int, freedBytes: Long) -> Unit = { _, _ -> },
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result = cleanupOrphanVaultFilesInternal()
+                withContext(Dispatchers.Main) {
+                    onSuccess(result.deletedCount, result.freedBytes)
+                }
+            } catch (e: Throwable) {
+                SyncLogger.log("VAULT", "خطا در پاکسازی فایل‌های یتیم صندوق: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onError("خطا در پاکسازی فایل‌های یتیم صندوق: ${e.localizedMessage}")
+                }
+            }
+        }
     }
 
     fun addOrUpdateGroup(group: PasswordGroup) {
@@ -1422,6 +2475,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
             runCatching {
                 BackupSyncManager.createEncryptedBackupToUri(getApplication(), uri, effectivePassword)
             }.onSuccess {
+                plainPrefs.edit().putLong("last_enc_backup_timestamp", System.currentTimeMillis()).commit()
                 _syncState.value = SyncUiState.Success("فایل پشتیبان با موفقیت در مسیر انتخاب‌شده ذخیره شد")
                 onSuccess()
             }.onFailure { err ->
@@ -1479,6 +2533,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 val payload = BackupSyncManager.createEncryptedBackupPayload(getApplication(), effectivePassword)
                 BackupSyncManager.uploadToWebDav(config, payload)
             }.onSuccess {
+                plainPrefs.edit().putLong("last_enc_backup_timestamp", System.currentTimeMillis()).commit()
                 _syncState.value = SyncUiState.Success("پشتیبان‌گیری روی سرور WebDAV (${config.serverUrl}) با موفقیت انجام شد")
             }.onFailure { err ->
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "خطا در ارسال فایل به سرور WebDAV")
@@ -1520,6 +2575,101 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 _syncState.value = SyncUiState.Error(err.localizedMessage ?: "خطا در دریافت فایل از WebDAV")
             }
         }
+    }
+
+    fun uploadVaultArchiveToWebDav(
+        password: CharArray,
+        totpCode: String? = null,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val passwordCopy = password.copyOf()
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            val config = _webDavConfig.value
+            if (config.serverUrl.isBlank() || config.username.isBlank() || config.password.isBlank()) {
+                val err = "آدرس سرور، نام کاربری و کلمه عبور WebDAV را وارد کنید"
+                _syncState.value = SyncUiState.Error(err)
+                onError(err)
+                return@launch
+            }
+            try {
+                withContext(Dispatchers.IO) {
+                    BackupSyncManager.uploadVaultArchiveToWebDav(
+                        context = getApplication(),
+                        config = config,
+                        password = passwordCopy,
+                        totpCode = totpCode
+                    )
+                }
+                plainPrefs.edit()
+                    .putLong("last_vault_backup_timestamp", System.currentTimeMillis())
+                    .commit()
+                _vaultBackupTrigger.value = System.currentTimeMillis()
+                _syncState.value = SyncUiState.Success("آرشیو صندوق با موفقیت در WebDAV آپلود شد")
+                withContext(Dispatchers.Main) {
+                    onSuccess()
+                }
+            } catch (e: Throwable) {
+                val errorMsg = e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطا در ارسال فایل آرشیو صندوق به WebDAV"
+                _syncState.value = SyncUiState.Error(errorMsg)
+                withContext(Dispatchers.Main) {
+                    onError(errorMsg)
+                }
+            } finally {
+                passwordCopy.fill('\u0000')
+            }
+        }
+    }
+
+    fun downloadAndRestoreVaultArchiveFromWebDav(
+        password: CharArray,
+        totpCode: String? = null,
+        mergeStrategy: MergeStrategy = MergeStrategy.SKIP_DUPLICATES,
+        onSuccess: (VaultImportArchiveReport) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val passwordCopy = password.copyOf()
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            val config = _webDavConfig.value
+            if (config.serverUrl.isBlank() || config.username.isBlank() || config.password.isBlank()) {
+                val err = "اطلاعات سرور، نام کاربری و کلمه عبور WebDAV کامل نیست"
+                _syncState.value = SyncUiState.Error(err)
+                onError(err)
+                return@launch
+            }
+            var tempFile: File? = null
+            try {
+                tempFile = withContext(Dispatchers.IO) {
+                    BackupSyncManager.downloadVaultArchiveToTempFile(getApplication(), config)
+                }
+                val tempUri = Uri.fromFile(tempFile)
+                val report = importVaultArchiveInternal(
+                    sourceUri = tempUri,
+                    password = passwordCopy,
+                    totpCode = totpCode,
+                    mergeStrategy = mergeStrategy
+                )
+                _syncState.value = SyncUiState.Success("بازیابی آرشیو صندوق از WebDAV با موفقیت انجام شد (\u2068${report.newFiles + report.replacedFiles + report.renamedFiles}\u2069 فایل اضافه یا بازیابی شد)")
+                withContext(Dispatchers.Main) {
+                    onSuccess(report)
+                }
+            } catch (e: Throwable) {
+                val errorMsg = e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطا در دریافت یا بازیابی آرشیو صندوق از WebDAV"
+                _syncState.value = SyncUiState.Error(errorMsg)
+                withContext(Dispatchers.Main) {
+                    onError(errorMsg)
+                }
+            } finally {
+                tempFile?.delete()
+                passwordCopy.fill('\u0000')
+            }
+        }
+    }
+
+    fun setSyncError(message: String) {
+        _syncState.value = SyncUiState.Error(message)
     }
 
     fun resetSyncState() {

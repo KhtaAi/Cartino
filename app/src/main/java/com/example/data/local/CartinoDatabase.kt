@@ -15,6 +15,8 @@ import com.example.data.model.GeneratedPasswordHistory
 import com.example.data.model.IdentityDocument
 import com.example.data.model.PasswordEntry
 import com.example.data.model.PasswordGroup
+import com.example.data.model.VaultFile
+import com.example.data.model.VaultGroup
 
 class DocumentTypeConverter {
     @TypeConverter
@@ -66,6 +68,17 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `vault_groups` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `parentGroupId` TEXT, `createdAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `vault_files` (`id` TEXT NOT NULL, `groupId` TEXT, `displayName` TEXT NOT NULL, `originalFileName` TEXT NOT NULL, `mimeType` TEXT NOT NULL, `sizeBytes` INTEGER NOT NULL, `sha256` TEXT NOT NULL, `storageName` TEXT NOT NULL, `encryptionVersion` INTEGER NOT NULL, `notes` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))"
+        )
+    }
+}
+
 @Database(
     entities = [
         BankCard::class,
@@ -73,9 +86,11 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         DocumentGroup::class,
         PasswordGroup::class,
         PasswordEntry::class,
-        GeneratedPasswordHistory::class
+        GeneratedPasswordHistory::class,
+        VaultGroup::class,
+        VaultFile::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 @TypeConverters(DocumentTypeConverter::class)
@@ -83,6 +98,7 @@ abstract class CartinoDatabase : RoomDatabase() {
     abstract fun bankCardDao(): BankCardDao
     abstract fun identityDocumentDao(): IdentityDocumentDao
     abstract fun passwordDao(): PasswordDao
+    abstract fun vaultDao(): VaultDao
 
     companion object {
         @Volatile
@@ -95,7 +111,7 @@ abstract class CartinoDatabase : RoomDatabase() {
                     CartinoDatabase::class.java,
                     "cartino_secure_db"
                 )
-                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                 .build()
                 INSTANCE = instance
                 instance

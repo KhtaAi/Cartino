@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Download
@@ -87,6 +89,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -103,6 +106,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+
+private const val PREF_SYNC_SECTION_EXPANDED = "settings_sync_backup_expanded"
 
 private sealed interface UpdateCheckState {
     object Idle : UpdateCheckState
@@ -139,6 +144,29 @@ fun SecuritySettingsScreen(
         }
     }
 
+    val prefs = remember(context) {
+        context.getSharedPreferences("cartino_prefs", Context.MODE_PRIVATE)
+    }
+    var isSyncSectionExpanded by remember {
+        mutableStateOf(prefs.getBoolean(PREF_SYNC_SECTION_EXPANDED, true))
+    }
+    val setSyncSectionExpanded: (Boolean) -> Unit = remember(prefs) {
+        { expanded ->
+            isSyncSectionExpanded = expanded
+            prefs.edit().putBoolean(PREF_SYNC_SECTION_EXPANDED, expanded).apply()
+        }
+    }
+
+    // Hoisted at Screen level so SAF launchers and dialogs survive section collapse/expand
+    val syncBackupController = rememberSyncBackupController(
+        viewModel = viewModel,
+        onEnsureExpanded = {
+            if (!isSyncSectionExpanded) {
+                setSyncSectionExpanded(true)
+            }
+        }
+    )
+
     var isGroup1Expanded by remember { mutableStateOf(false) }
     var isGroup2Expanded by remember { mutableStateOf(false) }
     var isGroup3Expanded by remember { mutableStateOf(false) }
@@ -159,6 +187,20 @@ fun SecuritySettingsScreen(
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 4.dp)
         )
+
+        // ==================== GROUP 0: همگام‌سازی و پشتیبان‌گیری ====================
+        CollapsibleSectionCard(
+            title = "همگام‌سازی و پشتیبان‌گیری",
+            icon = Icons.Default.CloudSync,
+            isExpanded = isSyncSectionExpanded,
+            onToggle = { setSyncSectionExpanded(!isSyncSectionExpanded) },
+            modifier = Modifier.testTag("sync_backup_section_card")
+        ) {
+            SyncBackupSectionContent(
+                viewModel = viewModel,
+                controller = syncBackupController
+            )
+        }
 
         // ==================== GROUP 1: ظاهر و تم ====================
         CollapsibleSectionCard(
@@ -1041,6 +1083,9 @@ fun SecuritySettingsScreen(
             text = { Text("آیا از غیرفعال‌سازی احراز هویت دو مرحله‌ای اطمینان دارید؟ پس از غیرفعال‌سازی، بازیابی فایل‌های پشتیبان نیازی به کد یکبارمصرف نخواهد داشت.") }
         )
     }
+
+    // Hoisted Sync & Backup Dialogs at Screen level
+    SyncBackupDialogsHost(controller = syncBackupController)
 }
 
 @Composable

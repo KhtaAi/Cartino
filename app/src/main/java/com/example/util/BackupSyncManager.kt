@@ -17,7 +17,9 @@ import okhttp3.Credentials
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -681,4 +683,249 @@ object BackupSyncManager {
             throw e
         }
     }
+
+    fun extractVaultFileName(remotePath: String): String {
+        val clean = remotePath.trim().removePrefix("/")
+        val lastSlash = clean.lastIndexOf('/')
+        val dir = if (lastSlash >= 0) clean.substring(0, lastSlash + 1) else ""
+        val name = if (lastSlash >= 0) clean.substring(lastSlash + 1) else clean
+
+        val vaultName = if (name.isBlank()) {
+            "cartino_vault.cvault"
+        } else if (name.endsWith(".enc", ignoreCase = true)) {
+            name.substring(0, name.length - 4) + ".cvault"
+        } else if (name.endsWith(".cvault", ignoreCase = true)) {
+            name
+        } else {
+            "$name.cvault"
+        }
+        return "$dir$vaultName"
+    }
+
+    fun isVaultArchiveUri(context: Context, uri: Uri): Boolean {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val header = ByteArray(13)
+                var totalRead = 0
+                while (totalRead < 13) {
+                    val r = stream.read(header, totalRead, 13 - totalRead)
+                    if (r == -1) break
+                    totalRead += r
+                }
+                totalRead == 13 && header.toString(Charsets.US_ASCII) == VaultArchiveManager.MAGIC_HEADER
+            } ?: false
+        } catch (e: Throwable) {
+            false
+        }
+    }
+
+    fun isVaultArchiveBytes(bytes: ByteArray): Boolean {
+        if (bytes.size < 13) return false
+        return bytes.take(13).toByteArray().toString(Charsets.US_ASCII) == VaultArchiveManager.MAGIC_HEADER
+    }
+
+    /**
+     * Uploads a streaming .cvault archive to WebDAV server.
+     */
+    suspend fun uploadVaultArchiveToWebDav(
+        context: Context,
+        config: WebDavConfig,
+        password: CharArray,
+        totpCode: String? = null
+    ): Boolean = withContext(Dispatchers.IO) {
+        val serverUrlClean = config.serverUrl.trim()
+        val usernameClean = config.username.trim()
+        val passwordClean = config.password.trim()
+        val remotePathClean = config.remotePath.trim().removePrefix("/")
+
+        val serverHost = extractHost(serverUrlClean)
+        val maskedUser = maskUsername(usernameClean)
+        val vaultFileName = extractVaultFileName(remotePathClean)
+        val lastSlash = vaultFileName.lastIndexOf('/')
+        val fileNameOnly = if (lastSlash >= 0) vaultFileName.substring(lastSlash + 1) else vaultFileName
+
+        SyncLogger.log("WEBDAV_PUT", "شروع فرایند آپلود آرشیو صندوق به WebDAV...")
+        SyncLogger.log("WEBDAV_PUT", "آدرس سرور: '$serverHost'")
+        SyncLogger.log("WEBDAV_PUT", "نام کاربری: '$maskedUser'")
+
+        if (serverUrlClean.isBlank() || usernameClean.isBlank() || passwordClean.isBlank()) {
+            SyncLogger.log("WEBDAV_PUT", "خطا: مشخصات اتصال کامل نیست")
+            throw IllegalArgumentException("آدرس سرور، نام کاربری و کلمه عبور WebDAV را وارد و تایید کنید")
+        }
+
+        val baseUrl = if (serverUrlClean.endsWith("/")) serverUrlClean else "$serverUrlClean/"
+        val targetUrl = "$baseUrl$vaultFileName"
+        SyncLogger.log("WEBDAV_PUT", "فایل مقصد آپلود صندوق: $fileNameOnly")
+
+        val tempFile = File.createTempFile("vault_upload_", ".cvault", context.cacheDir)
+        try {
+            val tempUri = Uri.fromFile(tempFile)
+            val archiveResult = VaultArchiveManager.createVaultArchive(context, tempUri, password, totpCode)
+            if (!archiveResult.success) {
+                SyncLogger.log("WEBDAV_PUT", "خطا در ساخت آرشیو صندوق: ${archiveResult.errorMessage}")
+                throw IllegalStateException(archiveResult.errorMessage ?: "خطا در ساخت آرشیو صندوق")
+            }
+
+            val credential = Credentials.basic(usernameClean, passwordClean, Charsets.UTF_8)
+            val requestBody = tempFile.asRequestBody("application/octet-stream".toMediaType())
+
+            val request = Request.Builder()
+                .url(targetUrl)
+                .header("Authorization", credential)
+                .header("User-Agent", "Cartino-Android-WebDAV/1.0")
+                .header("Accept", "*/*")
+                .put(requestBody)
+                .build()
+
+            SyncLogger.log("WEBDAV_PUT", "در حال ارسال فایل آرشیو صندوق به سرور (${tempFile.length()} بایت)...")
+            val response = httpClient.newCall(request).execute()
+            val code = response.code
+            val message = response.message
+            SyncLogger.log("WEBDAV_PUT", "پاسخ دریافتی: کد HTTP $code ($message)")
+
+            if (!response.isSuccessful) {
+                when (code) {
+                    401 -> {
+                        SyncLogger.log("WEBDAV_PUT", "خطای 401 Unauthorized: نام کاربری یا رمز WebDAV اشتباه است.")
+                        throw IllegalStateException("خطای احراز هویت سرور WebDAV (کد 401): نام کاربری یا App Token اشتباه است.")
+                    }
+                    403 -> {
+                        SyncLogger.log("WEBDAV_PUT", "خطای 403 Forbidden: عدم داشتن مجوز نوشتن در پوشه سرور.")
+                        throw IllegalStateException("خطا در دسترسی سرور (کد 403): عدم مجوز نوشتن در پوشه.")
+                    }
+                    404 -> {
+                        SyncLogger.log("WEBDAV_PUT", "خطای 404 Not Found: مسیر سرور یافت نشد.")
+                        throw IllegalStateException("مسیر سرور WebDAV یافت نشد (کد 404). پوشه را در سرور بررسی کنید.")
+                    }
+                    else -> {
+                        SyncLogger.log("WEBDAV_PUT", "خطا در آپلود آرشیو صندوق به سرور (کد $code)")
+                        throw IllegalStateException("خطا در آپلود به سرور WebDAV (کد: $code)")
+                    }
+                }
+            }
+            SyncLogger.log("WEBDAV_PUT", "آپلود آرشیو صندوق با موفقیت انجام شد.")
+            true
+        } catch (e: Exception) {
+            SyncLogger.log("WEBDAV_PUT", "خطای ارتباط یا ساخت آرشیو: ${e.localizedMessage}")
+            throw e
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    /**
+     * Downloads vault archive from WebDAV into a local temporary File.
+     * The caller is responsible for deleting the returned temp file when done.
+     */
+    suspend fun downloadVaultArchiveToTempFile(context: Context, config: WebDavConfig): File = withContext(Dispatchers.IO) {
+        val serverUrlClean = config.serverUrl.trim()
+        val usernameClean = config.username.trim()
+        val passwordClean = config.password.trim()
+        val remotePathClean = config.remotePath.trim().removePrefix("/")
+
+        val serverHost = extractHost(serverUrlClean)
+        val maskedUser = maskUsername(usernameClean)
+        val vaultFileName = extractVaultFileName(remotePathClean)
+        val lastSlash = vaultFileName.lastIndexOf('/')
+        val fileNameOnly = if (lastSlash >= 0) vaultFileName.substring(lastSlash + 1) else vaultFileName
+
+        SyncLogger.log("WEBDAV_GET", "شروع دریافت آرشیو صندوق از سرور WebDAV...")
+        SyncLogger.log("WEBDAV_GET", "آدرس سرور: '$serverHost'")
+        SyncLogger.log("WEBDAV_GET", "نام کاربری: '$maskedUser'")
+
+        if (serverUrlClean.isBlank() || usernameClean.isBlank() || passwordClean.isBlank()) {
+            SyncLogger.log("WEBDAV_GET", "خطا: مشخصات اتصال کامل نیست")
+            throw IllegalArgumentException("اطلاعات سرور، نام کاربری و کلمه عبور WebDAV کامل نیست")
+        }
+
+        val baseUrl = if (serverUrlClean.endsWith("/")) serverUrlClean else "$serverUrlClean/"
+        val targetUrl = "$baseUrl$vaultFileName"
+        SyncLogger.log("WEBDAV_GET", "فایل مقصد دریافت صندوق: $fileNameOnly")
+
+        val credential = Credentials.basic(usernameClean, passwordClean, Charsets.UTF_8)
+        val request = Request.Builder()
+            .url(targetUrl)
+            .header("Authorization", credential)
+            .header("User-Agent", "Cartino-Android-WebDAV/1.0")
+            .header("Accept", "*/*")
+            .get()
+            .build()
+
+        try {
+            SyncLogger.log("WEBDAV_GET", "در حال ارسال درخواست دریافت آرشیو صندوق...")
+            val response = httpClient.newCall(request).execute()
+            val code = response.code
+            val message = response.message
+            SyncLogger.log("WEBDAV_GET", "پاسخ دریافتی: کد HTTP $code ($message)")
+
+            if (!response.isSuccessful) {
+                when (code) {
+                    401 -> {
+                        SyncLogger.log("WEBDAV_GET", "خطای 401 Unauthorized: احراز هویت ناموفق بود.")
+                        throw IllegalStateException("خطای احراز هویت WebDAV (کد 401): نام کاربری یا App Token اشتباه است.")
+                    }
+                    404 -> {
+                        SyncLogger.log("WEBDAV_GET", "خطای 404 Not Found: فایل '$fileNameOnly' در سرور یافت نشد.")
+                        throw IllegalStateException("فایل آرشیو صندوق با نام $fileNameOnly در سرور WebDAV یافت نشد (کد: 404)")
+                    }
+                    else -> {
+                        SyncLogger.log("WEBDAV_GET", "خطا در دریافت فایل از سرور (کد $code)")
+                        throw IllegalStateException("خطا در دریافت فایل از WebDAV (کد: $code)")
+                    }
+                }
+            }
+
+            val tempFile = File.createTempFile("vault_download_", ".cvault", context.cacheDir)
+            response.body?.byteStream()?.use { input ->
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            } ?: run {
+                tempFile.delete()
+                SyncLogger.log("WEBDAV_GET", "خطا: بدنه پاسخ سرور خالی است")
+                throw IllegalStateException("پاسخ دریافتی از سرور خالی است")
+            }
+
+            SyncLogger.log("WEBDAV_GET", "دریافت فایل آرشیو صندوق انجام شد (${tempFile.length()} بایت)")
+            tempFile
+        } catch (e: Exception) {
+            SyncLogger.log("WEBDAV_GET", "خطای ارتباط شبکه: ${e.localizedMessage}")
+            throw e
+        }
+    }
+
+    /**
+     * Downloads vault archive from WebDAV as a ByteArray (convenience/test helper).
+     */
+    suspend fun downloadVaultArchiveFromWebDav(config: WebDavConfig): ByteArray? = withContext(Dispatchers.IO) {
+        val serverUrlClean = config.serverUrl.trim()
+        val usernameClean = config.username.trim()
+        val passwordClean = config.password.trim()
+        val remotePathClean = config.remotePath.trim().removePrefix("/")
+        val vaultFileName = extractVaultFileName(remotePathClean)
+
+        if (serverUrlClean.isBlank() || usernameClean.isBlank() || passwordClean.isBlank()) {
+            throw IllegalArgumentException("اطلاعات سرور، نام کاربری و کلمه عبور WebDAV کامل نیست")
+        }
+
+        val baseUrl = if (serverUrlClean.endsWith("/")) serverUrlClean else "$serverUrlClean/"
+        val targetUrl = "$baseUrl$vaultFileName"
+
+        val credential = Credentials.basic(usernameClean, passwordClean, Charsets.UTF_8)
+        val request = Request.Builder()
+            .url(targetUrl)
+            .header("Authorization", credential)
+            .header("User-Agent", "Cartino-Android-WebDAV/1.0")
+            .header("Accept", "*/*")
+            .get()
+            .build()
+
+        val response = httpClient.newCall(request).execute()
+        if (!response.isSuccessful) {
+            null
+        } else {
+            response.body?.bytes()
+        }
+    }
 }
+
