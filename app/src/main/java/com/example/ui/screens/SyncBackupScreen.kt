@@ -88,7 +88,12 @@ import com.example.ui.SyncUiState
 import com.example.ui.theme.VazirmatnFontFamily
 import com.example.util.ClipboardAutoClearManager
 import com.example.util.SyncLogger
+import com.example.util.TotpManager
+import com.example.util.VaultArchiveManifest
+import com.example.util.VaultArchiveManager
 import com.example.util.WebDavConfig
+import java.io.File
+import java.io.FileNotFoundException
 
 enum class BackupTarget {
     LOCAL_FILE,
@@ -129,6 +134,13 @@ class SyncBackupController internal constructor(
     // Two-step BOTH progress: 0 = idle/not both, 1 = step 1 in progress, 2 = step 2 in progress
     var bothStep by mutableStateOf(0)
     var isVaultRestorePending by mutableStateOf(false)
+    var pendingBothTotpCode by mutableStateOf<String?>(null)
+
+    // Vault v2 TOTP verification dialog state
+    var showVaultTotpVerifyDialog by mutableStateOf(false)
+    var pendingVaultTotpSecret by mutableStateOf("")
+    var pendingVaultManifest by mutableStateOf<VaultArchiveManifest?>(null)
+    var pendingVaultTempFile by mutableStateOf<File?>(null)
 
     fun launchLocalBackup() {
         activeTarget = BackupTarget.LOCAL_FILE
@@ -256,16 +268,27 @@ fun rememberSyncBackupController(
                     viewModel.exportVaultArchive(
                         targetUri = destinationUri,
                         password = passwordToUse.toCharArray(),
-                        onSuccess = { result ->
+                        onSuccess = {
                             val msg = if (wasStep2) {
                                 "هر دو فایل پشتیبان (.enc و .cvault) با موفقیت ذخیره شدند"
                             } else {
                                 "بک‌آپ صندوق با موفقیت در حافظه ذخیره شد"
                             }
+                            viewModel.setSyncSuccess(msg)
                             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                         },
                         onError = { msg ->
-                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            val displayMsg = if (wasStep2) {
+                                "فایل .enc ذخیره شد، اما آرشیو صندوق نه: $msg"
+                            } else {
+                                msg
+                            }
+                            if (wasStep2) {
+                                viewModel.setSyncSuccess(displayMsg)
+                            } else {
+                                viewModel.setSyncError(displayMsg)
+                            }
+                            Toast.makeText(context, displayMsg, Toast.LENGTH_LONG).show()
                         }
                     )
                 } else {
@@ -283,6 +306,9 @@ fun rememberSyncBackupController(
                 }
             }
         } ?: run {
+            if (controller.bothStep == 2) {
+                viewModel.setSyncSuccess("فایل .enc ذخیره شد، اما آرشیو صندوق نه: انتخاب مسیر آرشیو لغو شد")
+            }
             controller.bothStep = 0
         }
     }
@@ -293,14 +319,15 @@ fun rememberSyncBackupController(
     ) { uri: Uri? ->
         uri?.let { sourceUri ->
             onEnsureExpanded()
-            val isVault = BackupSyncManager.isVaultArchiveUri(context, sourceUri)
 
             if (controller.bothStep == 1 || controller.selectedScope == BackupScope.APP_DATA_ONLY) {
+                val isVault = BackupSyncManager.isVaultArchiveUri(context, sourceUri)
                 if (isVault) {
                     val errMsg = "فرمت فایل انتخاب‌شده .cvault است، نه .enc"
                     Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
                     viewModel.setSyncError(errMsg)
                     controller.bothStep = 0
+                    controller.pendingBothTotpCode = null
                     return@let
                 }
                 controller.pendingRestoreUri = sourceUri
@@ -309,11 +336,28 @@ fun rememberSyncBackupController(
                 controller.isVaultRestorePending = false
                 controller.showPasswordDialog = true
             } else if (controller.bothStep == 2 || controller.selectedScope == BackupScope.VAULT_ONLY) {
+                val canOpen = runCatching {
+                    context.contentResolver.openInputStream(sourceUri)?.use { true } ?: false
+                }.getOrDefault(false)
+                if (!canOpen) {
+                    if (controller.bothStep == 2) {
+                        controller.bothStep = 0
+                        controller.pendingBothTotpCode = null
+                        viewModel.setSyncSuccess("داده‌های اپ بازیابی شد؛ آرشیو صندوق یافت نشد و بازیابی نشد.")
+                    } else {
+                        val errMsg = "فایل آرشیو صندوق یافت نشد. ابتدا یک بکآپ صندوق تهیه و آپلود کنید."
+                        Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+                        viewModel.setSyncError(errMsg)
+                    }
+                    return@let
+                }
+                val isVault = BackupSyncManager.isVaultArchiveUri(context, sourceUri)
                 if (!isVault) {
                     val errMsg = "فرمت فایل انتخاب‌شده .enc است، نه .cvault"
                     Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
                     viewModel.setSyncError(errMsg)
                     controller.bothStep = 0
+                    controller.pendingBothTotpCode = null
                     return@let
                 }
                 controller.pendingRestoreUri = sourceUri
@@ -323,7 +367,11 @@ fun rememberSyncBackupController(
                 controller.showPasswordDialog = true
             }
         } ?: run {
+            if (controller.bothStep == 2) {
+                viewModel.setSyncSuccess("داده‌های اپ بازیابی شد؛ آرشیو صندوق یافت نشد و بازیابی نشد.")
+            }
             controller.bothStep = 0
+            controller.pendingBothTotpCode = null
         }
     }
 
@@ -917,14 +965,70 @@ fun SyncBackupDialogsHost(
                 controller.showVaultMergeDialog = false
                 controller.pendingMergeCallback = null
                 controller.bothStep = 0
+                controller.pendingBothTotpCode = null
             }
         )
+    }
+
+    fun proceedLocalVaultImport(
+        uri: Uri,
+        password: String,
+        totpCode: String?,
+        manifest: VaultArchiveManifest,
+        wasBothStep2: Boolean
+    ) {
+        coroutineScope.launch {
+            val hasDuplicates = viewModel.hasVaultArchiveDuplicates(manifest)
+            val runImport: (MergeStrategy) -> Unit = { strategy ->
+                viewModel.importVaultArchive(
+                    sourceUri = uri,
+                    password = password.toCharArray(),
+                    totpCode = totpCode,
+                    mergeStrategy = strategy,
+                    onSuccess = {
+                        val msg = if (wasBothStep2) {
+                            "بازیابی هر دو بخش (.enc و .cvault) با موفقیت انجام شد"
+                        } else {
+                            "بازیابی صندوق با موفقیت انجام شد"
+                        }
+                        viewModel.setSyncSuccess(msg)
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        controller.bothStep = 0
+                        controller.pendingBothTotpCode = null
+                    },
+                    onError = { err ->
+                        if (wasBothStep2) {
+                            val partialMsg = "داده‌های اپ بازیابی شد، اما بازیابی آرشیو صندوق ناموفق بود: $err"
+                            viewModel.setSyncSuccess(partialMsg)
+                            Toast.makeText(context, partialMsg, Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                        }
+                        controller.bothStep = 0
+                        controller.pendingBothTotpCode = null
+                    }
+                )
+            }
+            if (hasDuplicates) {
+                controller.pendingMergeCallback = runImport
+                controller.showVaultMergeDialog = true
+            } else {
+                runImport(MergeStrategy.SKIP_DUPLICATES)
+            }
+        }
     }
 
     // Password & Confirmation Dialog
     if (controller.showPasswordDialog) {
         AlertDialog(
-            onDismissRequest = { controller.showPasswordDialog = false },
+            onDismissRequest = {
+                controller.showPasswordDialog = false
+                if (controller.bothStep == 2 && controller.activeAction == ActionType.RESTORE) {
+                    viewModel.setSyncSuccess("داده‌های اپ بازیابی شد؛ آرشیو صندوق یافت نشد و بازیابی نشد.")
+                }
+                controller.bothStep = 0
+                controller.pendingBothTotpCode = null
+            },
             confirmButton = {
                 Button(
                     onClick = {
@@ -938,49 +1042,52 @@ fun SyncBackupDialogsHost(
                                 val uri = controller.pendingRestoreUri
                                 if (uri != null) {
                                     if (controller.isVaultRestorePending) {
+                                        val wasBothStep2 = controller.bothStep == 2
                                         coroutineScope.launch {
-                                            val manifest = viewModel.inspectVaultArchiveFromUri(uri, effectivePwd.toCharArray())
-                                            if (manifest != null && viewModel.hasVaultArchiveDuplicates(manifest)) {
-                                                controller.pendingMergeCallback = { strategy ->
-                                                    viewModel.importVaultArchive(
-                                                        sourceUri = uri,
-                                                        password = effectivePwd.toCharArray(),
-                                                        mergeStrategy = strategy,
-                                                        onSuccess = {
-                                                            val msg = if (controller.bothStep == 2) {
-                                                                "بازیابی هر دو بخش (.enc و .cvault) با موفقیت انجام شد"
-                                                            } else {
-                                                                "بازیابی صندوق با موفقیت انجام شد"
-                                                            }
-                                                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                                            controller.bothStep = 0
-                                                        },
-                                                        onError = { err ->
-                                                            controller.bothStep = 0
-                                                            Toast.makeText(context, err, Toast.LENGTH_LONG).show()
-                                                        }
-                                                    )
+                                            val inspectionResult = viewModel.inspectVaultArchiveForRestore(
+                                                uri = uri,
+                                                password = effectivePwd.toCharArray()
+                                            )
+                                            if (inspectionResult.isFailure) {
+                                                val err = inspectionResult.exceptionOrNull()
+                                                val isMissingFile = generateSequence(err) { it.cause }
+                                                    .any { it is FileNotFoundException }
+                                                if (wasBothStep2 && isMissingFile) {
+                                                    viewModel.setSyncSuccess("داده‌های اپ بازیابی شد؛ آرشیو صندوق یافت نشد و بازیابی نشد.")
+                                                } else if (!wasBothStep2 && isMissingFile) {
+                                                    val msg = "فایل آرشیو صندوق یافت نشد. ابتدا یک بکآپ صندوق تهیه و آپلود کنید."
+                                                    viewModel.setSyncError(msg)
+                                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                                } else {
+                                                    val msg = err?.localizedMessage ?: "خطا در بررسی فایل آرشیو صندوق"
+                                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                                 }
-                                                controller.showVaultMergeDialog = true
+                                                controller.bothStep = 0
+                                                controller.pendingBothTotpCode = null
                                             } else {
-                                                viewModel.importVaultArchive(
-                                                    sourceUri = uri,
-                                                    password = effectivePwd.toCharArray(),
-                                                    mergeStrategy = MergeStrategy.SKIP_DUPLICATES,
-                                                    onSuccess = {
-                                                        val msg = if (controller.bothStep == 2) {
-                                                            "بازیابی هر دو بخش (.enc و .cvault) با موفقیت انجام شد"
-                                                        } else {
-                                                            "بازیابی صندوق با موفقیت انجام شد"
-                                                        }
+                                                val inspection = inspectionResult.getOrThrow()
+                                                val manifest = inspection.manifest
+                                                if (inspection.version >= VaultArchiveManager.FORMAT_VERSION && manifest.totpRequired) {
+                                                    if (manifest.totpSecret.isBlank()) {
+                                                        val msg = "این آرشیو صندوق نیازمند احراز هویت دو مرحله‌ای است اما سکرت TOTP در آن ذخیره نشده است"
+                                                        viewModel.setSyncError(msg)
                                                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                                         controller.bothStep = 0
-                                                    },
-                                                    onError = { err ->
-                                                        controller.bothStep = 0
-                                                        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                                        controller.pendingBothTotpCode = null
+                                                    } else {
+                                                        val prevCode = controller.pendingBothTotpCode
+                                                        if (wasBothStep2 && prevCode != null && TotpManager.verifyTotp(manifest.totpSecret, prevCode)) {
+                                                            proceedLocalVaultImport(uri, effectivePwd, prevCode, manifest, true)
+                                                        } else {
+                                                            controller.pendingVaultTotpSecret = manifest.totpSecret
+                                                            controller.pendingVaultManifest = manifest
+                                                            controller.pendingVaultTempFile = null
+                                                            controller.showVaultTotpVerifyDialog = true
+                                                        }
                                                     }
-                                                )
+                                                } else {
+                                                    proceedLocalVaultImport(uri, effectivePwd, null, manifest, wasBothStep2)
+                                                }
                                             }
                                         }
                                     } else {
@@ -993,12 +1100,22 @@ fun SyncBackupDialogsHost(
                                             if (totpRequired && hasTotpSecret) {
                                                 controller.showTotpVerifyDialog = true
                                             } else {
-                                                viewModel.restoreLocalBackupFromUri(uri, effectivePwd)
-                                                if (controller.bothStep == 1) {
-                                                    controller.bothStep = 2
-                                                    Toast.makeText(context, "مرحله ۱ از ۲ انجام شد. مرحله ۲: انتخاب فایل آرشیو صندوق (.cvault)", Toast.LENGTH_LONG).show()
-                                                    controller.launchOpenDocument(arrayOf("*/*"))
-                                                }
+                                                controller.pendingBothTotpCode = null
+                                                viewModel.restoreLocalBackupFromUri(
+                                                    uri = uri,
+                                                    password = effectivePwd,
+                                                    onSuccess = {
+                                                        if (controller.bothStep == 1) {
+                                                            controller.bothStep = 2
+                                                            Toast.makeText(context, "مرحله ۱ از ۲ انجام شد. مرحله ۲: انتخاب فایل آرشیو صندوق (.cvault)", Toast.LENGTH_LONG).show()
+                                                            controller.launchOpenDocument(arrayOf("*/*"))
+                                                        }
+                                                    },
+                                                    onError = {
+                                                        controller.bothStep = 0
+                                                        controller.pendingBothTotpCode = null
+                                                    }
+                                                )
                                             }
                                         }
                                     }
@@ -1022,6 +1139,11 @@ fun SyncBackupDialogsHost(
                                         viewModel.downloadAndRestoreVaultArchiveFromWebDav(
                                             password = effectivePwd.toCharArray(),
                                             mergeStrategy = MergeStrategy.SKIP_DUPLICATES,
+                                            onTotpRequired = { secret, tempFile ->
+                                                controller.pendingVaultTotpSecret = secret
+                                                controller.pendingVaultTempFile = tempFile
+                                                controller.showVaultTotpVerifyDialog = true
+                                            },
                                             onSuccess = {
                                                 Toast.makeText(context, "بازیابی آرشیو صندوق از WebDAV با موفقیت انجام شد", Toast.LENGTH_LONG).show()
                                             },
@@ -1039,12 +1161,16 @@ fun SyncBackupDialogsHost(
                                             if (totpRequired && hasTotpSecret) {
                                                 controller.showTotpVerifyDialog = true
                                             } else {
-                                                viewModel.restoreFromWebDav(effectivePwd)
-                                                viewModel.downloadAndRestoreVaultArchiveFromWebDav(
-                                                    password = effectivePwd.toCharArray(),
-                                                    mergeStrategy = MergeStrategy.SKIP_DUPLICATES,
-                                                    onSuccess = {
-                                                        Toast.makeText(context, "بازیابی داده‌ها و آرشیو صندوق از WebDAV با موفقیت انجام شد", Toast.LENGTH_LONG).show()
+                                                viewModel.restoreBothFromWebDav(
+                                                    password = effectivePwd,
+                                                    totpCode = null,
+                                                    onVaultTotpRequired = { secret, tempFile ->
+                                                        controller.pendingVaultTotpSecret = secret
+                                                        controller.pendingVaultTempFile = tempFile
+                                                        controller.showVaultTotpVerifyDialog = true
+                                                    },
+                                                    onSuccess = { msg ->
+                                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                                     },
                                                     onError = { err ->
                                                         Toast.makeText(context, err, Toast.LENGTH_LONG).show()
@@ -1056,17 +1182,50 @@ fun SyncBackupDialogsHost(
                                 }
                             }
                         } else { // BACKUP
+                            controller.passwordInput = effectivePwd
                             if (controller.activeTarget == BackupTarget.LOCAL_FILE) {
                                 controller.pendingRestoreUri?.let { uri ->
-                                    if (controller.selectedScope == BackupScope.VAULT_ONLY || controller.bothStep == 2) {
+                                    if (controller.bothStep == 1) {
+                                        viewModel.createLocalBackupToUri(
+                                            uri = uri,
+                                            password = effectivePwd,
+                                            onSuccess = {
+                                                Toast.makeText(context, "مرحله ۱ از ۲ انجام شد. مرحله ۲: ایجاد فایل آرشیو صندوق (.cvault)", Toast.LENGTH_LONG).show()
+                                                controller.bothStep = 2
+                                                controller.launchCreateDocument("cartino_vault.cvault")
+                                            },
+                                            onError = { msg ->
+                                                controller.bothStep = 0
+                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                            }
+                                        )
+                                    } else if (controller.selectedScope == BackupScope.VAULT_ONLY || controller.bothStep == 2) {
+                                        val wasStep2 = controller.bothStep == 2
+                                        controller.bothStep = 0
                                         viewModel.exportVaultArchive(
                                             targetUri = uri,
                                             password = effectivePwd.toCharArray(),
                                             onSuccess = {
-                                                Toast.makeText(context, "فایل آرشیو صندوق با موفقیت ذخیره شد", Toast.LENGTH_LONG).show()
+                                                val msg = if (wasStep2) {
+                                                    "هر دو فایل پشتیبان (.enc و .cvault) با موفقیت ذخیره شدند"
+                                                } else {
+                                                    "فایل آرشیو صندوق با موفقیت ذخیره شد"
+                                                }
+                                                viewModel.setSyncSuccess(msg)
+                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                             },
                                             onError = { msg ->
-                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                                val displayMsg = if (wasStep2) {
+                                                    "فایل .enc ذخیره شد، اما آرشیو صندوق نه: $msg"
+                                                } else {
+                                                    msg
+                                                }
+                                                if (wasStep2) {
+                                                    viewModel.setSyncSuccess(displayMsg)
+                                                } else {
+                                                    viewModel.setSyncError(displayMsg)
+                                                }
+                                                Toast.makeText(context, displayMsg, Toast.LENGTH_LONG).show()
                                             }
                                         )
                                     } else {
@@ -1099,11 +1258,10 @@ fun SyncBackupDialogsHost(
                                         )
                                     }
                                     BackupScope.BOTH -> {
-                                        viewModel.backupToWebDav(effectivePwd)
-                                        viewModel.uploadVaultArchiveToWebDav(
-                                            password = effectivePwd.toCharArray(),
-                                            onSuccess = {
-                                                Toast.makeText(context, "داده‌های اپ و آرشیو صندوق در سرور WebDAV ذخیره شدند", Toast.LENGTH_LONG).show()
+                                        viewModel.backupBothToWebDav(
+                                            password = effectivePwd,
+                                            onSuccess = { msg ->
+                                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                             },
                                             onError = { msg ->
                                                 Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
@@ -1120,7 +1278,16 @@ fun SyncBackupDialogsHost(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { controller.showPasswordDialog = false }) { Text("انصراف") }
+                TextButton(
+                    onClick = {
+                        controller.showPasswordDialog = false
+                        if (controller.bothStep == 2 && controller.activeAction == ActionType.RESTORE) {
+                            viewModel.setSyncSuccess("داده‌های اپ بازیابی شد؛ آرشیو صندوق یافت نشد و بازیابی نشد.")
+                        }
+                        controller.bothStep = 0
+                        controller.pendingBothTotpCode = null
+                    }
+                ) { Text("انصراف") }
             },
             title = {
                 Text(
@@ -1170,26 +1337,45 @@ fun SyncBackupDialogsHost(
                 controller.showTotpVerifyDialog = false
                 when (controller.pendingRestoreTarget) {
                     BackupTarget.WEBDAV -> {
-                        viewModel.restoreFromWebDav(controller.pendingRestorePassword, totpCode = code)
                         if (controller.selectedScope == BackupScope.BOTH) {
-                            viewModel.downloadAndRestoreVaultArchiveFromWebDav(
-                                password = controller.pendingRestorePassword.toCharArray(),
+                            viewModel.restoreBothFromWebDav(
+                                password = controller.pendingRestorePassword,
                                 totpCode = code,
-                                mergeStrategy = MergeStrategy.SKIP_DUPLICATES,
-                                onSuccess = {
-                                    Toast.makeText(context, "بازیابی داده‌ها و آرشیو صندوق از WebDAV با موفقیت انجام شد", Toast.LENGTH_LONG).show()
+                                onVaultTotpRequired = { secret, tempFile ->
+                                    controller.pendingVaultTotpSecret = secret
+                                    controller.pendingVaultTempFile = tempFile
+                                    controller.showVaultTotpVerifyDialog = true
+                                },
+                                onSuccess = { msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                },
+                                onError = { err ->
+                                    Toast.makeText(context, err, Toast.LENGTH_LONG).show()
                                 }
                             )
+                        } else {
+                            viewModel.restoreFromWebDav(controller.pendingRestorePassword, totpCode = code)
                         }
                     }
                     BackupTarget.LOCAL_FILE -> {
                         controller.pendingRestoreUri?.let { uri ->
-                            viewModel.restoreLocalBackupFromUri(uri, controller.pendingRestorePassword, totpCode = code)
-                            if (controller.bothStep == 1) {
-                                controller.bothStep = 2
-                                Toast.makeText(context, "مرحله ۱ از ۲ انجام شد. مرحله ۲: انتخاب فایل آرشیو صندوق (.cvault)", Toast.LENGTH_LONG).show()
-                                controller.launchOpenDocument(arrayOf("*/*"))
-                            }
+                            controller.pendingBothTotpCode = code
+                            viewModel.restoreLocalBackupFromUri(
+                                uri = uri,
+                                password = controller.pendingRestorePassword,
+                                totpCode = code,
+                                onSuccess = {
+                                    if (controller.bothStep == 1) {
+                                        controller.bothStep = 2
+                                        Toast.makeText(context, "مرحله ۱ از ۲ انجام شد. مرحله ۲: انتخاب فایل آرشیو صندوق (.cvault)", Toast.LENGTH_LONG).show()
+                                        controller.launchOpenDocument(arrayOf("*/*"))
+                                    }
+                                },
+                                onError = {
+                                    controller.bothStep = 0
+                                    controller.pendingBothTotpCode = null
+                                }
+                            )
                         }
                     }
                 }
@@ -1197,6 +1383,68 @@ fun SyncBackupDialogsHost(
             onDismiss = {
                 controller.showTotpVerifyDialog = false
                 controller.bothStep = 0
+                controller.pendingBothTotpCode = null
+                viewModel.resetSyncState()
+            }
+        )
+    }
+
+    if (controller.showVaultTotpVerifyDialog) {
+        com.example.ui.components.TotpVerifyDialog(
+            onVerify = { code ->
+                val secret = controller.pendingVaultTotpSecret
+                secret.isNotBlank() && TotpManager.verifyTotp(secret, code)
+            },
+            onSuccess = { code ->
+                controller.showVaultTotpVerifyDialog = false
+                val tempFile = controller.pendingVaultTempFile
+                val uri = controller.pendingRestoreUri
+                val pwd = controller.pendingRestorePassword
+                val manifest = controller.pendingVaultManifest
+                val wasBothStep2 = controller.bothStep == 2
+                controller.pendingVaultTotpSecret = ""
+                controller.pendingVaultManifest = null
+
+                if (tempFile != null) {
+                    val wasBothWebDav = controller.selectedScope == BackupScope.BOTH
+                    viewModel.completeVaultArchiveRestoreFromTempFile(
+                        tempFile = tempFile,
+                        password = pwd.toCharArray(),
+                        totpCode = code,
+                        mergeStrategy = MergeStrategy.SKIP_DUPLICATES,
+                        customSuccessMessage = if (wasBothWebDav) {
+                            "بازیابی داده‌ها و آرشیو صندوق از WebDAV با موفقیت انجام شد"
+                        } else {
+                            null
+                        },
+                        onSuccess = {
+                            controller.pendingVaultTempFile = null
+                            val msg = if (wasBothWebDav) {
+                                "بازیابی داده‌ها و آرشیو صندوق از WebDAV با موفقیت انجام شد"
+                            } else {
+                                "بازیابی آرشیو صندوق با موفقیت انجام شد"
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        },
+                        onError = { err ->
+                            controller.pendingVaultTempFile = null
+                            Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                        }
+                    )
+                } else if (uri != null && manifest != null) {
+                    proceedLocalVaultImport(uri, pwd, code, manifest, wasBothStep2)
+                }
+            },
+            onDismiss = {
+                controller.showVaultTotpVerifyDialog = false
+                controller.pendingVaultTotpSecret = ""
+                controller.pendingVaultManifest = null
+                controller.pendingBothTotpCode = null
+                controller.bothStep = 0
+                controller.pendingVaultTempFile?.let { file ->
+                    viewModel.cancelPendingVaultTempFile(file)
+                    controller.pendingVaultTempFile = null
+                } ?: viewModel.resetSyncState()
             }
         )
     }

@@ -94,6 +94,7 @@ class VaultArchiveTest {
             dao.getAllFilesList().forEach { dao.deleteFileById(it.id) }
             dao.getAllGroupsList().forEach { dao.deleteGroupById(it.id) }
             VaultStorageManager.setTestKeyProviderForTesting(null)
+            VaultArchiveManager.setTestTotpConfigProviderForTesting(null)
             VaultStorageManager.getVaultDirectory(application).deleteRecursively()
             tempDir.deleteRecursively()
         }
@@ -123,7 +124,8 @@ class VaultArchiveTest {
             val iv = ByteArray(12).also { dataHeader.readFully(it) }
 
             // Derive key independently using Argon2id with exact parameters (4, 65536, 1)
-            val cleanTotp = totpCode?.trim()?.takeIf { it.isNotEmpty() }
+            // Version 1 bound optional totpCode into KDF; Version 2 derives strictly from password.
+            val cleanTotp = if (version == 1) totpCode?.trim()?.takeIf { it.isNotEmpty() } else null
             val combinedChars = if (cleanTotp != null) {
                 (String(password) + ":" + cleanTotp).toCharArray()
             } else {
@@ -277,8 +279,7 @@ class VaultArchiveTest {
 
             val result = viewModel.exportVaultArchiveInternal(
                 targetUri = Uri.fromFile(archiveFile),
-                password = password,
-                totpCode = null
+                password = password
             )
 
             assertTrue(result.success)
@@ -295,10 +296,11 @@ class VaultArchiveTest {
                 password = "Archive!Master#Password2026".toCharArray()
             )
             assertEquals("CARTINO_VAULT", parsed.magic)
-            assertEquals(1, parsed.version)
+            assertEquals(2, parsed.version)
             assertEquals(16, parsed.salt.size)
             assertEquals(12, parsed.iv.size)
             assertFalse(parsed.manifest.totpRequired)
+            assertEquals("", parsed.manifest.totpSecret)
             assertTrue(parsed.manifest.timestamp > 0L)
             assertEquals(3, parsed.manifest.groups.size)
             assertEquals(3, parsed.manifest.files.size)
@@ -320,44 +322,56 @@ class VaultArchiveTest {
     }
 
     @Test
-    fun createArchiveWithTotpCode_bindsTotpToKeyDerivationAndSetsManifestFlag() {
+    fun createArchiveV2WithTotpActive_requiresNoTotpCode_usesPasswordOnlyKdf_andStoresSecretInManifest() {
         runBlocking {
+            val secret = "JBSWY3DPEHPK3PXP"
+            VaultArchiveManager.setTestTotpConfigProviderForTesting { true to secret }
+
             val dao = CartinoDatabase.getDatabase(application).vaultDao()
             val grp = VaultGroup(id = "grp-totp", name = "محرمانه", parentGroupId = null)
             dao.insertGroup(grp)
 
-            val payload = "2FA bound secret file".toByteArray(Charsets.UTF_8)
+            val payload = "2FA secret-in-manifest payload".toByteArray(Charsets.UTF_8)
             val src = File(tempDir, "2fa.txt").apply { writeBytes(payload) }
             viewModel.importVaultFilesInternal(listOf(Uri.fromFile(src)), currentGroupId = grp.id)
             val stored = dao.getAllFilesList().single()
 
-            val archiveFile = File(tempDir, "vault_totp.cvault")
+            val archiveFile = File(tempDir, "vault_totp_v2.cvault")
             val result = VaultArchiveManager.createVaultArchive(
                 context = application,
                 targetUri = Uri.fromFile(archiveFile),
-                password = "VaultPassword#9876".toCharArray(),
-                totpCode = "482910"
+                password = "VaultPassword#9876".toCharArray()
             )
             assertTrue(result.success)
+            assertNull(result.errorMessage)
 
+            // v2 archive key derives strictly from password even when TOTP is enabled
             val parsed = manuallyDecryptArchive(
                 archiveFile = archiveFile,
                 password = "VaultPassword#9876".toCharArray(),
-                totpCode = "482910"
+                totpCode = null
             )
+            assertEquals(2, parsed.version)
             assertTrue(parsed.manifest.totpRequired)
+            assertEquals(secret, parsed.manifest.totpSecret)
             assertArrayEquals(payload, parsed.filePayloadsByStorageName[stored.storageName])
 
-            // Missing or wrong TOTP must fail GCM tag verification
-            val wrongTotpEx = runCatching {
-                manuallyDecryptArchive(
-                    archiveFile = archiveFile,
-                    password = "VaultPassword#9876".toCharArray(),
-                    totpCode = "000000"
-                )
-            }.exceptionOrNull()
-            assertNotNull(wrongTotpEx)
-            assertTrue(hasCause<AEADBadTagException>(wrongTotpEx!!))
+            // Disabling device TOTP produces manifest with totpRequired=false and empty secret
+            VaultArchiveManager.setTestTotpConfigProviderForTesting { false to "" }
+            val archiveNoTotp = File(tempDir, "vault_no_totp_v2.cvault")
+            val noTotpResult = VaultArchiveManager.createVaultArchive(
+                context = application,
+                targetUri = Uri.fromFile(archiveNoTotp),
+                password = "VaultPassword#9876".toCharArray()
+            )
+            assertTrue(noTotpResult.success)
+            val parsedNoTotp = manuallyDecryptArchive(
+                archiveFile = archiveNoTotp,
+                password = "VaultPassword#9876".toCharArray()
+            )
+            assertEquals(2, parsedNoTotp.version)
+            assertFalse(parsedNoTotp.manifest.totpRequired)
+            assertEquals("", parsedNoTotp.manifest.totpSecret)
         }
     }
 
@@ -373,8 +387,7 @@ class VaultArchiveTest {
             val result = VaultArchiveManager.createVaultArchive(
                 context = application,
                 targetUri = Uri.fromFile(archiveFile),
-                password = "CorrectArchivePassword!1".toCharArray(),
-                totpCode = null
+                password = "CorrectArchivePassword!1".toCharArray()
             )
             assertTrue(result.success)
 
@@ -422,8 +435,7 @@ class VaultArchiveTest {
             val archiveResult = VaultArchiveManager.createVaultArchive(
                 context = application,
                 targetUri = Uri.fromFile(archiveFile),
-                password = "StreamingMemoryTest!2026".toCharArray(),
-                totpCode = null
+                password = "StreamingMemoryTest!2026".toCharArray()
             )
 
             System.gc()
@@ -464,8 +476,7 @@ class VaultArchiveTest {
             val incompleteArchive = File(tempDir, "incomplete.cvault")
             val failResult: ArchiveResult = viewModel.exportVaultArchiveInternal(
                 targetUri = Uri.fromFile(incompleteArchive),
-                password = "MidWriteFailure!Test123".toCharArray(),
-                totpCode = null
+                password = "MidWriteFailure!Test123".toCharArray()
             )
 
             assertFalse(failResult.success)
@@ -495,7 +506,6 @@ class VaultArchiveTest {
             viewModel.exportVaultArchive(
                 targetUri = Uri.fromFile(outArchive),
                 password = "VmArchivePassword!2026".toCharArray(),
-                totpCode = null,
                 onSuccess = { res -> deferred.complete(res) },
                 onError = { err -> deferred.complete(ArchiveResult(success = false, errorMessage = err)) }
             )

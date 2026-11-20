@@ -29,11 +29,14 @@ import com.example.util.SyncLogger
 import com.example.util.TotpManager
 import com.example.util.DomainUtils
 import com.example.util.VaultArchiveGroupMetadata
+import com.example.util.VaultArchiveInspection
 import com.example.util.VaultArchiveManifest
 import com.example.util.VaultArchiveManager
+import com.example.util.VaultArchiveNotFoundException
 import com.example.util.VaultStorageManager
 import com.example.util.VaultZipExporter
 import com.example.util.WebDavConfig
+import javax.crypto.AEADBadTagException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1112,14 +1115,12 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     internal suspend fun exportVaultArchiveInternal(
         targetUri: Uri,
-        password: CharArray,
-        totpCode: String? = null
+        password: CharArray
     ): ArchiveResult {
         val result = VaultArchiveManager.createVaultArchive(
             context = getApplication<Application>().applicationContext,
             targetUri = targetUri,
-            password = password,
-            totpCode = totpCode
+            password = password
         )
         if (result.success) {
             plainPrefs.edit()
@@ -1133,7 +1134,6 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     fun exportVaultArchive(
         targetUri: Uri,
         password: CharArray,
-        totpCode: String? = null,
         onSuccess: (ArchiveResult) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -1142,8 +1142,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val result = exportVaultArchiveInternal(
                     targetUri = targetUri,
-                    password = passwordCopy,
-                    totpCode = totpCode
+                    password = passwordCopy
                 )
                 withContext(Dispatchers.Main) {
                     val appContext = getApplication<Application>().applicationContext
@@ -1456,6 +1455,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
     ) {
         val passwordCopy = password.copyOf()
         viewModelScope.launch(Dispatchers.IO) {
+            _syncState.value = SyncUiState.Loading
             try {
                 val report = importVaultArchiveInternal(
                     sourceUri = sourceUri,
@@ -1463,11 +1463,18 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     totpCode = totpCode,
                     mergeStrategy = mergeStrategy,
                     onProgress = { cur, total ->
+                        if (total > 0) {
+                            _syncState.value = SyncUiState.Progress(cur, total, "در حال بازیابی فایل‌های صندوق...")
+                        }
                         viewModelScope.launch(Dispatchers.Main) {
                             onProgress(cur, total)
                         }
                     },
                     onMergeConflict = onMergeConflict
+                )
+                val restoredCount = report.newFiles + report.replacedFiles + report.renamedFiles
+                _syncState.value = SyncUiState.Success(
+                    "بازیابی آرشیو صندوق با موفقیت انجام شد (\u2068$restoredCount\u2069 فایل اضافه یا بازیابی شد)"
                 )
                 withContext(Dispatchers.Main) {
                     onSuccess(report)
@@ -1476,6 +1483,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 val errMsg = e.localizedMessage?.takeIf { it.isNotBlank() }
                     ?: "خطا در بازیابی آرشیو صندوق"
                 SyncLogger.log("VAULT_ARCHIVE", "خطا در importVaultArchive: $errMsg")
+                _syncState.value = SyncUiState.Error(errMsg)
                 withContext(Dispatchers.Main) {
                     onError(errMsg)
                 }
@@ -1554,6 +1562,35 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         } catch (e: Throwable) {
             SyncLogger.log("VAULT_ARCHIVE", "خطا در inspectVaultArchiveFromUri: ${e.message}")
             null
+        }
+    }
+
+    suspend fun inspectVaultArchiveForRestore(
+        uri: Uri,
+        password: CharArray,
+        totpCode: String? = null
+    ): Result<VaultArchiveInspection> {
+        _syncState.value = SyncUiState.Loading
+        return withContext(Dispatchers.IO) {
+            try {
+                val inspection = VaultArchiveManager.inspectVaultArchiveWithVersion(
+                    context = getApplication<Application>().applicationContext,
+                    sourceUri = uri,
+                    password = password,
+                    totpCode = totpCode
+                )
+                _syncState.value = SyncUiState.Idle
+                Result.success(inspection)
+            } catch (e: Throwable) {
+                val hasGcmError = generateSequence<Throwable>(e) { it.cause }.any { it is AEADBadTagException }
+                val message = when {
+                    hasGcmError -> "رمز عبور اشتباه است یا یکپارچگی فایل آرشیو تأیید نشد"
+                    else -> e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطا در بررسی فایل آرشیو صندوق"
+                }
+                SyncLogger.log("VAULT_ARCHIVE", "خطا در inspectVaultArchiveForRestore: $message")
+                _syncState.value = SyncUiState.Error(message)
+                Result.failure(IllegalStateException(message, e))
+            }
         }
     }
 
@@ -2486,12 +2523,20 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun restoreLocalBackupFromUri(uri: Uri, password: String, totpCode: String? = null) {
+    fun restoreLocalBackupFromUri(
+        uri: Uri,
+        password: String,
+        totpCode: String? = null,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
         viewModelScope.launch {
             _syncState.value = SyncUiState.Loading
             val effectivePassword = password.ifBlank { _masterEncryptionPassword.value }
             if (effectivePassword.isBlank()) {
-                _syncState.value = SyncUiState.Error("لطفا کلمه عبور رمزنگاری را وارد کنید یا در تنظیمات ثبت کنید")
+                val msg = "لطفا کلمه عبور رمزنگاری را وارد کنید یا در تنظیمات ثبت کنید"
+                _syncState.value = SyncUiState.Error(msg)
+                onError(msg)
                 return@launch
             }
             runCatching {
@@ -2510,8 +2555,11 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 _totpSecret.value = safeGetEncryptedString("totp_secret", "")
                 _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
                 _syncState.value = SyncUiState.Success("بازیابی اطلاعات با موفقیت انجام شد ($cardsCount کارت، $docsCount مدرک، $newDocGroupsCount گروه مدرک جدید، $reusedDocGroupsCount گروه مدرک تطبیق‌یافته، $passwordsCount پسورد)")
+                onSuccess()
             }.onFailure { err ->
-                _syncState.value = SyncUiState.Error(err.localizedMessage ?: "کلمه عبور اشتباه است یا فایل انتخاب‌شده معتبر نیست")
+                val msg = err.localizedMessage ?: "کلمه عبور اشتباه است یا فایل انتخاب‌شده معتبر نیست"
+                _syncState.value = SyncUiState.Error(msg)
+                onError(msg)
             }
         }
     }
@@ -2579,7 +2627,6 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
 
     fun uploadVaultArchiveToWebDav(
         password: CharArray,
-        totpCode: String? = null,
         onSuccess: () -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -2591,6 +2638,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 val err = "آدرس سرور، نام کاربری و کلمه عبور WebDAV را وارد کنید"
                 _syncState.value = SyncUiState.Error(err)
                 onError(err)
+                passwordCopy.fill('\u0000')
                 return@launch
             }
             try {
@@ -2598,8 +2646,7 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                     BackupSyncManager.uploadVaultArchiveToWebDav(
                         context = getApplication(),
                         config = config,
-                        password = passwordCopy,
-                        totpCode = totpCode
+                        password = passwordCopy
                     )
                 }
                 plainPrefs.edit()
@@ -2622,10 +2669,74 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun backupBothToWebDav(
+        password: String,
+        onSuccess: (String) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            val config = _webDavConfig.value
+            if (config.serverUrl.isBlank() || config.username.isBlank() || config.password.isBlank()) {
+                val err = "آدرس سرور، نام کاربری و کلمه عبور WebDAV را وارد کنید"
+                _syncState.value = SyncUiState.Error(err)
+                onError(err)
+                return@launch
+            }
+            val effectivePassword = password.ifBlank { _masterEncryptionPassword.value }
+            if (effectivePassword.isBlank()) {
+                val err = "لطفا کلمه عبور رمزنگاری را در تنظیمات ثبت کنید"
+                _syncState.value = SyncUiState.Error(err)
+                onError(err)
+                return@launch
+            }
+
+            val encResult = runCatching {
+                val payload = BackupSyncManager.createEncryptedBackupPayload(getApplication(), effectivePassword)
+                BackupSyncManager.uploadToWebDav(config, payload)
+            }
+            if (encResult.isFailure) {
+                val errMsg = encResult.exceptionOrNull()?.localizedMessage?.takeIf { it.isNotBlank() }
+                    ?: "خطا در ارسال فایل .enc به سرور WebDAV"
+                _syncState.value = SyncUiState.Error(errMsg)
+                onError(errMsg)
+                return@launch
+            }
+
+            plainPrefs.edit().putLong("last_enc_backup_timestamp", System.currentTimeMillis()).commit()
+
+            val passwordChars = effectivePassword.toCharArray()
+            try {
+                withContext(Dispatchers.IO) {
+                    BackupSyncManager.uploadVaultArchiveToWebDav(
+                        context = getApplication(),
+                        config = config,
+                        password = passwordChars
+                    )
+                }
+                plainPrefs.edit()
+                    .putLong("last_vault_backup_timestamp", System.currentTimeMillis())
+                    .commit()
+                _vaultBackupTrigger.value = System.currentTimeMillis()
+                val msg = "داده‌های اپ و آرشیو صندوق در سرور WebDAV ذخیره شدند"
+                _syncState.value = SyncUiState.Success(msg)
+                onSuccess(msg)
+            } catch (e: Throwable) {
+                val reason = e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطای نامشخص"
+                val partialMsg = "فایل .enc آپلود شد، اما آرشیو صندوق نه: $reason"
+                _syncState.value = SyncUiState.Success(partialMsg)
+                onSuccess(partialMsg)
+            } finally {
+                passwordChars.fill('\u0000')
+            }
+        }
+    }
+
     fun downloadAndRestoreVaultArchiveFromWebDav(
         password: CharArray,
         totpCode: String? = null,
         mergeStrategy: MergeStrategy = MergeStrategy.SKIP_DUPLICATES,
+        onTotpRequired: ((secret: String, tempFile: File) -> Unit)? = null,
         onSuccess: (VaultImportArchiveReport) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
@@ -2637,14 +2748,41 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 val err = "اطلاعات سرور، نام کاربری و کلمه عبور WebDAV کامل نیست"
                 _syncState.value = SyncUiState.Error(err)
                 onError(err)
+                passwordCopy.fill('\u0000')
                 return@launch
             }
             var tempFile: File? = null
+            var handedOffTempFile = false
             try {
                 tempFile = withContext(Dispatchers.IO) {
                     BackupSyncManager.downloadVaultArchiveToTempFile(getApplication(), config)
                 }
                 val tempUri = Uri.fromFile(tempFile)
+                val inspection = withContext(Dispatchers.IO) {
+                    VaultArchiveManager.inspectVaultArchiveWithVersion(
+                        context = getApplication(),
+                        sourceUri = tempUri,
+                        password = passwordCopy,
+                        totpCode = totpCode
+                    )
+                }
+                if (inspection.version >= VaultArchiveManager.FORMAT_VERSION && inspection.manifest.totpRequired) {
+                    val secret = inspection.manifest.totpSecret
+                    if (secret.isBlank()) {
+                        throw IllegalStateException("این آرشیو صندوق نیازمند احراز هویت دو مرحله‌ای است اما سکرت TOTP در آن ذخیره نشده است")
+                    }
+                    val cleanCode = totpCode?.trim()?.takeIf { it.isNotEmpty() }
+                    if (cleanCode == null || !TotpManager.verifyTotp(secret, cleanCode)) {
+                        if (onTotpRequired != null) {
+                            handedOffTempFile = true
+                            _syncState.value = SyncUiState.Idle
+                            withContext(Dispatchers.Main) {
+                                onTotpRequired(secret, tempFile)
+                            }
+                            return@launch
+                        }
+                    }
+                }
                 val report = importVaultArchiveInternal(
                     sourceUri = tempUri,
                     password = passwordCopy,
@@ -2655,17 +2793,184 @@ class CartinoViewModel(application: Application) : AndroidViewModel(application)
                 withContext(Dispatchers.Main) {
                     onSuccess(report)
                 }
+            } catch (e: VaultArchiveNotFoundException) {
+                val errorMsg = "فایل آرشیو صندوق در سرور یافت نشد (کد 404). ابتدا یک بکآپ صندوق تهیه و آپلود کنید."
+                _syncState.value = SyncUiState.Error(errorMsg)
+                withContext(Dispatchers.Main) {
+                    onError(errorMsg)
+                }
             } catch (e: Throwable) {
-                val errorMsg = e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطا در دریافت یا بازیابی آرشیو صندوق از WebDAV"
+                val hasGcmError = generateSequence<Throwable>(e) { it.cause }.any { it is AEADBadTagException }
+                val errorMsg = when {
+                    hasGcmError -> "رمز عبور اشتباه است یا یکپارچگی فایل آرشیو تأیید نشد"
+                    else -> e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطا در دریافت یا بازیابی آرشیو صندوق از WebDAV"
+                }
                 _syncState.value = SyncUiState.Error(errorMsg)
                 withContext(Dispatchers.Main) {
                     onError(errorMsg)
                 }
             } finally {
-                tempFile?.delete()
+                if (!handedOffTempFile) {
+                    tempFile?.delete()
+                }
                 passwordCopy.fill('\u0000')
             }
         }
+    }
+
+    fun restoreBothFromWebDav(
+        password: String,
+        totpCode: String? = null,
+        onVaultTotpRequired: (secret: String, tempFile: File) -> Unit,
+        onSuccess: (String) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            val config = _webDavConfig.value
+            if (config.serverUrl.isBlank() || config.username.isBlank() || config.password.isBlank()) {
+                val err = "اطلاعات سرور، نام کاربری و کلمه عبور WebDAV کامل نیست"
+                _syncState.value = SyncUiState.Error(err)
+                onError(err)
+                return@launch
+            }
+            val effectivePassword = password.ifBlank { _masterEncryptionPassword.value }
+            if (effectivePassword.isBlank()) {
+                val err = "لطفا کلمه عبور رمزنگاری را در تنظیمات ثبت کنید"
+                _syncState.value = SyncUiState.Error(err)
+                onError(err)
+                return@launch
+            }
+
+            val encResult = runCatching {
+                val payload = BackupSyncManager.downloadFromWebDav(config)
+                BackupSyncManager.restoreFromEncryptedPayload(
+                    context = getApplication(),
+                    encryptedBase64 = payload,
+                    password = effectivePassword,
+                    totpCode = totpCode
+                )
+            }
+            if (encResult.isFailure) {
+                val errMsg = encResult.exceptionOrNull()?.localizedMessage?.takeIf { it.isNotBlank() }
+                    ?: "خطا در دریافت یا بازیابی فایل .enc از WebDAV"
+                _syncState.value = SyncUiState.Error(errMsg)
+                onError(errMsg)
+                return@launch
+            }
+
+            _totpSecret.value = safeGetEncryptedString("totp_secret", "")
+            _isTotpEnabled.value = (safeGetEncryptedString("totp_enabled", "false") == "true")
+
+            val passwordChars = effectivePassword.toCharArray()
+            var tempFile: File? = null
+            var handedOffTempFile = false
+            try {
+                tempFile = withContext(Dispatchers.IO) {
+                    BackupSyncManager.downloadVaultArchiveToTempFile(getApplication(), config)
+                }
+                val tempUri = Uri.fromFile(tempFile)
+                val inspection = withContext(Dispatchers.IO) {
+                    VaultArchiveManager.inspectVaultArchiveWithVersion(
+                        context = getApplication(),
+                        sourceUri = tempUri,
+                        password = passwordChars,
+                        totpCode = totpCode
+                    )
+                }
+                if (inspection.version >= VaultArchiveManager.FORMAT_VERSION && inspection.manifest.totpRequired) {
+                    val secret = inspection.manifest.totpSecret
+                    if (secret.isBlank()) {
+                        val msg = "داده‌های اپ بازیابی شد، اما آرشیو صندوق فاقد سکرت TOTP معتبر است."
+                        _syncState.value = SyncUiState.Success(msg)
+                        onSuccess(msg)
+                        return@launch
+                    }
+                    val cleanCode = totpCode?.trim()?.takeIf { it.isNotEmpty() }
+                    if (cleanCode == null || !TotpManager.verifyTotp(secret, cleanCode)) {
+                        handedOffTempFile = true
+                        _syncState.value = SyncUiState.Idle
+                        withContext(Dispatchers.Main) {
+                            onVaultTotpRequired(secret, tempFile)
+                        }
+                        return@launch
+                    }
+                }
+                importVaultArchiveInternal(
+                    sourceUri = tempUri,
+                    password = passwordChars,
+                    totpCode = totpCode,
+                    mergeStrategy = MergeStrategy.SKIP_DUPLICATES
+                )
+                val msg = "بازیابی داده‌ها و آرشیو صندوق از WebDAV با موفقیت انجام شد"
+                _syncState.value = SyncUiState.Success(msg)
+                onSuccess(msg)
+            } catch (_: VaultArchiveNotFoundException) {
+                val msg = "داده‌های اپ بازیابی شد؛ آرشیو صندوق یافت نشد و بازیابی نشد."
+                _syncState.value = SyncUiState.Success(msg)
+                onSuccess(msg)
+            } catch (e: Throwable) {
+                val hasGcmError = generateSequence<Throwable>(e) { it.cause }.any { it is AEADBadTagException }
+                val reason = when {
+                    hasGcmError -> "رمز عبور آرشیو صندوق اشتباه است"
+                    else -> e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطای نامشخص"
+                }
+                val msg = "داده‌های اپ بازیابی شد، اما بازیابی آرشیو صندوق ناموفق بود: $reason"
+                _syncState.value = SyncUiState.Success(msg)
+                onSuccess(msg)
+            } finally {
+                if (!handedOffTempFile) {
+                    tempFile?.delete()
+                }
+                passwordChars.fill('\u0000')
+            }
+        }
+    }
+
+    fun completeVaultArchiveRestoreFromTempFile(
+        tempFile: File,
+        password: CharArray,
+        totpCode: String? = null,
+        mergeStrategy: MergeStrategy = MergeStrategy.SKIP_DUPLICATES,
+        customSuccessMessage: String? = null,
+        onSuccess: (VaultImportArchiveReport) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val passwordCopy = password.copyOf()
+        viewModelScope.launch {
+            _syncState.value = SyncUiState.Loading
+            try {
+                val report = importVaultArchiveInternal(
+                    sourceUri = Uri.fromFile(tempFile),
+                    password = passwordCopy,
+                    totpCode = totpCode,
+                    mergeStrategy = mergeStrategy
+                )
+                val defaultMsg = "بازیابی آرشیو صندوق از WebDAV با موفقیت انجام شد (\u2068${report.newFiles + report.replacedFiles + report.renamedFiles}\u2069 فایل اضافه یا بازیابی شد)"
+                _syncState.value = SyncUiState.Success(customSuccessMessage ?: defaultMsg)
+                withContext(Dispatchers.Main) {
+                    onSuccess(report)
+                }
+            } catch (e: Throwable) {
+                val errorMsg = e.localizedMessage?.takeIf { it.isNotBlank() } ?: "خطا در بازیابی آرشیو صندوق"
+                _syncState.value = SyncUiState.Error(errorMsg)
+                withContext(Dispatchers.Main) {
+                    onError(errorMsg)
+                }
+            } finally {
+                tempFile.delete()
+                passwordCopy.fill('\u0000')
+            }
+        }
+    }
+
+    fun cancelPendingVaultTempFile(tempFile: File?) {
+        tempFile?.delete()
+        _syncState.value = SyncUiState.Idle
+    }
+
+    fun setSyncSuccess(message: String) {
+        _syncState.value = SyncUiState.Success(message)
     }
 
     fun setSyncError(message: String) {

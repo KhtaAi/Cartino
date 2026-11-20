@@ -15,21 +15,27 @@ import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.data.local.CartinoDatabase
+import com.example.data.model.DocumentGroup
 import com.example.data.model.VaultFile
 import com.example.data.model.VaultGroup
 import com.example.ui.CartinoViewModel
 import com.example.ui.MergeStrategy
+import com.example.ui.SyncUiState
 import com.example.ui.components.BackupScope
 import com.example.ui.components.BackupScopeDialog
 import com.example.ui.components.ScopeDialogMode
+import com.example.ui.components.TotpVerifyDialog
 import com.example.ui.components.VaultMergeDialog
 import com.example.ui.theme.CartinoTheme
 import com.example.util.BackupSyncManager
+import com.example.util.TotpManager
 import com.example.util.VaultArchiveFileMetadata
 import com.example.util.VaultArchiveGroupMetadata
 import com.example.util.VaultArchiveManifest
+import com.example.util.VaultArchiveManager
 import com.example.util.VaultStorageManager
 import com.example.util.WebDavConfig
+import androidx.compose.ui.test.performTextInput
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -40,9 +46,18 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import android.os.Looper
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34])
@@ -54,6 +69,8 @@ class VaultBackupRestoreUITest {
     private lateinit var application: Application
     private lateinit var viewModel: CartinoViewModel
     private lateinit var tempDir: File
+
+    private lateinit var testSecretKey: SecretKey
 
     @Before
     fun setup(): Unit = runBlocking {
@@ -70,18 +87,28 @@ class VaultBackupRestoreUITest {
             .clear()
             .commit()
 
-        val dao = CartinoDatabase.getDatabase(application).vaultDao()
-        dao.getAllFilesList().forEach { dao.deleteFileById(it.id) }
-        dao.getAllGroupsList().forEach { dao.deleteGroupById(it.id) }
+        val keyGen = KeyGenerator.getInstance("AES")
+        keyGen.init(256)
+        testSecretKey = keyGen.generateKey()
+        VaultStorageManager.setTestKeyProviderForTesting { testSecretKey }
+
+        val db = CartinoDatabase.getDatabase(application)
+        db.vaultDao().getAllFilesList().forEach { db.vaultDao().deleteFileById(it.id) }
+        db.vaultDao().getAllGroupsList().forEach { db.vaultDao().deleteGroupById(it.id) }
+        db.identityDocumentDao().getAllGroupsList().forEach { db.identityDocumentDao().deleteGroupById(it.id) }
 
         viewModel = CartinoViewModel(application)
     }
 
     @After
     fun tearDown(): Unit = runBlocking {
-        val dao = CartinoDatabase.getDatabase(application).vaultDao()
-        dao.getAllFilesList().forEach { dao.deleteFileById(it.id) }
-        dao.getAllGroupsList().forEach { dao.deleteGroupById(it.id) }
+        val db = CartinoDatabase.getDatabase(application)
+        db.vaultDao().getAllFilesList().forEach { db.vaultDao().deleteFileById(it.id) }
+        db.vaultDao().getAllGroupsList().forEach { db.vaultDao().deleteGroupById(it.id) }
+        db.identityDocumentDao().getAllGroupsList().forEach { db.identityDocumentDao().deleteGroupById(it.id) }
+        VaultStorageManager.setTestKeyProviderForTesting(null)
+        VaultArchiveManager.setTestTotpConfigProviderForTesting(null)
+        VaultStorageManager.getVaultDirectory(application).deleteRecursively()
         tempDir.deleteRecursively()
     }
 
@@ -419,5 +446,266 @@ class VaultBackupRestoreUITest {
             }
         }
         assertTrue(exceptionThrown)
+    }
+
+    @Test
+    fun totpVerifyDialog_againstArchiveSecret_validatesRejectsAndDismissesCleanly() {
+        val archiveSecret = "JBSWY3DPEHPK3PXP"
+        val currentSec = System.currentTimeMillis() / 1000L
+        val validWindowCodes = (-1..1).map {
+            TotpManager.generateTotp(archiveSecret, currentSec + it * 30L)
+        }.toSet()
+        val wrongCode = listOf("000000", "111111", "222222", "999999").first { it !in validWindowCodes }
+        val liveCode = TotpManager.generateTotp(archiveSecret, currentSec)
+
+        var verifiedCode: String? = null
+        var dismissed = false
+        var verifiedCodeValid: String? = null
+        val stage = androidx.compose.runtime.mutableStateOf(1)
+
+        composeTestRule.setContent {
+            CartinoTheme {
+                when (stage.value) {
+                    1 -> TotpVerifyDialog(
+                        onVerify = { code -> TotpManager.verifyTotp(archiveSecret, code) },
+                        onSuccess = { code -> verifiedCode = code },
+                        onDismiss = {
+                            dismissed = true
+                            stage.value = 2
+                        }
+                    )
+                    2 -> TotpVerifyDialog(
+                        onVerify = { code -> TotpManager.verifyTotp(archiveSecret, code) },
+                        onSuccess = { code -> verifiedCodeValid = code },
+                        onDismiss = {}
+                    )
+                }
+            }
+        }
+
+        // 1. Wrong code shows Persian error without invoking onSuccess
+        composeTestRule.onNodeWithText("123456").performTextInput(wrongCode)
+        composeTestRule.onNodeWithText("تایید و بازیابی").performClick()
+        composeTestRule.onNodeWithText("کد TOTP واردشده اشتباه است یا منقضی شده است.").assertIsDisplayed()
+        assertEquals(null, verifiedCode)
+        assertFalse(dismissed)
+
+        // 2. Dismiss transitions cleanly and moves to fresh dialog for valid code path
+        composeTestRule.onNodeWithText("انصراف").performClick()
+        assertTrue(dismissed)
+
+        // 3. Valid code path against archive secret succeeds
+        composeTestRule.onNodeWithText("123456").performTextInput(liveCode)
+        composeTestRule.onNodeWithText("تایید و بازیابی").performClick()
+        assertEquals(liveCode, verifiedCodeValid)
+    }
+
+    @Test
+    fun backupAndUploadPaths_succeedWithoutTotpCode_evenWhenTotpEnabled() = runBlocking {
+        VaultArchiveManager.setTestTotpConfigProviderForTesting { true to "JBSWY3DPEHPK3PXP" }
+
+        val src = File(tempDir, "doc.txt").apply { writeBytes("Vault upload doc".toByteArray()) }
+        viewModel.importVaultFilesInternal(listOf(Uri.fromFile(src)), currentGroupId = null)
+
+        val requests = CopyOnWriteArrayList<String>()
+        withLocalWebDavServer(
+            handler = { method, path, _ ->
+                requests.add("$method $path")
+                WebDavStubResponse(201, "Created", ByteArray(0))
+            }
+        ) { baseUrl ->
+            viewModel.updateWebDavConfig(WebDavConfig(baseUrl, "user", "pass", "cartino_backup.enc"))
+
+            // 1. VAULT_ONLY upload requires no TOTP code
+            var vaultCallbackOk = false
+            viewModel.uploadVaultArchiveToWebDav(
+                password = "UploadPassword!2026".toCharArray(),
+                onSuccess = { vaultCallbackOk = true }
+            )
+            waitUntilSyncStateSettled()
+            assertTrue(vaultCallbackOk)
+            assertTrue(viewModel.syncState.value is SyncUiState.Success)
+
+            // 2. BOTH upload requires no TOTP code and uploads .enc then .cvault
+            requests.clear()
+            viewModel.resetSyncState()
+            var bothMsg = ""
+            viewModel.backupBothToWebDav(
+                password = "UploadPassword!2026",
+                onSuccess = { bothMsg = it }
+            )
+            waitUntilSyncStateSettled()
+            assertTrue(viewModel.syncState.value is SyncUiState.Success)
+            assertTrue(bothMsg.contains("ذخیره شدند"))
+            assertEquals(listOf("PUT /dav/cartino_backup.enc", "PUT /dav/cartino_backup.cvault"), requests.toList())
+
+            val prefs = application.getSharedPreferences("cartino_prefs", Context.MODE_PRIVATE)
+            assertTrue(prefs.getLong("last_enc_backup_timestamp", 0L) > 0L)
+            assertTrue(prefs.getLong("last_vault_backup_timestamp", 0L) > 0L)
+        }
+    }
+
+    @Test
+    fun backupBothToWebDav_whenVaultUploadFailsAfterEncSucceeds_setsPartialSuccessMessage() = runBlocking {
+        val src = File(tempDir, "doc2.txt").apply { writeBytes("Vault doc2".toByteArray()) }
+        viewModel.importVaultFilesInternal(listOf(Uri.fromFile(src)), currentGroupId = null)
+
+        withLocalWebDavServer(
+            handler = { _, path, _ ->
+                if (path.endsWith(".enc")) {
+                    WebDavStubResponse(201, "Created", ByteArray(0))
+                } else {
+                    WebDavStubResponse(500, "Internal Server Error", ByteArray(0))
+                }
+            }
+        ) { baseUrl ->
+            viewModel.updateWebDavConfig(WebDavConfig(baseUrl, "user", "pass", "cartino_backup.enc"))
+            viewModel.backupBothToWebDav(password = "PartialFail!Pass2026")
+            waitUntilSyncStateSettled()
+
+            val state = viewModel.syncState.value
+            assertTrue("Expected SyncUiState.Success partial message, got $state", state is SyncUiState.Success)
+            val msg = (state as SyncUiState.Success).message
+            assertTrue(
+                "Unexpected partial success message: $msg",
+                msg.startsWith("فایل .enc آپلود شد، اما آرشیو صندوق نه:")
+            )
+        }
+    }
+
+    @Test
+    fun webDavRestore_404BehaviorForBothAndVaultOnly() = runBlocking {
+        // Seed DB with one document group, create a valid .enc payload, then clear DB
+        val db = CartinoDatabase.getDatabase(application)
+        db.identityDocumentDao().insertGroup(
+            DocumentGroup(
+                id = "doc-grp-404",
+                name = "گروه تست ۴۰۴"
+            )
+        )
+        val encPayload = BackupSyncManager.createEncryptedBackupPayload(application, "Restore404!Pass2026")
+        db.identityDocumentDao().getAllGroupsList().forEach { db.identityDocumentDao().deleteGroupById(it.id) }
+
+        withLocalWebDavServer(
+            handler = { _, path, _ ->
+                if (path.endsWith(".enc")) {
+                    WebDavStubResponse(200, "OK", encPayload.toByteArray(Charsets.UTF_8))
+                } else {
+                    WebDavStubResponse(404, "Not Found", ByteArray(0))
+                }
+            }
+        ) { baseUrl ->
+            viewModel.updateWebDavConfig(WebDavConfig(baseUrl, "user", "pass", "cartino_backup.enc"))
+
+            // 1. VAULT_ONLY 404 returns clear error + guidance
+            viewModel.downloadAndRestoreVaultArchiveFromWebDav(
+                password = "Restore404!Pass2026".toCharArray()
+            )
+            waitUntilSyncStateSettled()
+            val vaultOnlyState = viewModel.syncState.value
+            assertTrue("Expected Error for VAULT_ONLY 404, got $vaultOnlyState", vaultOnlyState is SyncUiState.Error)
+            assertTrue((vaultOnlyState as SyncUiState.Error).message.contains("ابتدا یک بکآپ صندوق تهیه و آپلود کنید."))
+
+            // 2. BOTH mode 404 finishes with warning-success (NO error banner) and restores .enc data
+            viewModel.resetSyncState()
+            viewModel.restoreBothFromWebDav(
+                password = "Restore404!Pass2026",
+                onVaultTotpRequired = { _, _ -> }
+            )
+            waitUntilSyncStateSettled()
+            val bothState = viewModel.syncState.value
+            assertTrue("Expected warning-success for BOTH 404, got $bothState", bothState is SyncUiState.Success)
+            assertEquals(
+                "داده‌های اپ بازیابی شد؛ آرشیو صندوق یافت نشد و بازیابی نشد.",
+                (bothState as SyncUiState.Success).message
+            )
+            val restoredGroups = db.identityDocumentDao().getAllGroupsList()
+            assertEquals(1, restoredGroups.size)
+            assertEquals("گروه تست ۴۰۴", restoredGroups.single().name)
+        }
+    }
+
+    private fun waitUntilSyncStateSettled(timeoutMs: Long = 20_000L) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            val s = viewModel.syncState.value
+            if (s is SyncUiState.Success || s is SyncUiState.Error) {
+                return
+            }
+            Thread.sleep(25)
+        }
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    private data class WebDavStubResponse(
+        val statusCode: Int,
+        val reason: String,
+        val body: ByteArray
+    )
+
+    private inline fun withLocalWebDavServer(
+        crossinline handler: (method: String, path: String, body: ByteArray) -> WebDavStubResponse,
+        block: (baseUrl: String) -> Unit
+    ) {
+        val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
+        val running = AtomicBoolean(true)
+        val acceptThread = Thread {
+            while (running.get()) {
+                val socket = try {
+                    server.accept()
+                } catch (_: Throwable) {
+                    break
+                }
+                Thread {
+                    socket.use { sock ->
+                        val input = sock.getInputStream()
+                        val headerBuf = ByteArrayOutputStream()
+                        var prev4 = 0
+                        while (true) {
+                            val b = input.read()
+                            if (b == -1) break
+                            headerBuf.write(b)
+                            prev4 = ((prev4 shl 8) or (b and 0xFF))
+                            if (prev4 == 0x0D0A0D0A) break
+                        }
+                        val headerText = headerBuf.toByteArray().toString(Charsets.ISO_8859_1)
+                        val lines = headerText.split("\r\n")
+                        val requestLine = lines.firstOrNull().orEmpty()
+                        val parts = requestLine.split(" ")
+                        val method = parts.getOrElse(0) { "GET" }
+                        val rawPath = parts.getOrElse(1) { "/" }
+                        val contentLength = lines
+                            .firstOrNull { it.startsWith("Content-Length:", ignoreCase = true) }
+                            ?.substringAfter(":")?.trim()?.toIntOrNull() ?: 0
+                        val reqBody = ByteArray(contentLength)
+                        var offset = 0
+                        while (offset < contentLength) {
+                            val r = input.read(reqBody, offset, contentLength - offset)
+                            if (r == -1) break
+                            offset += r
+                        }
+
+                        val resp = handler(method, rawPath, reqBody)
+                        val out = sock.getOutputStream()
+                        val headers = "HTTP/1.1 ${resp.statusCode} ${resp.reason}\r\n" +
+                            "Content-Length: ${resp.body.size}\r\n" +
+                            "Connection: close\r\n\r\n"
+                        out.write(headers.toByteArray(Charsets.US_ASCII))
+                        if (resp.body.isNotEmpty()) {
+                            out.write(resp.body)
+                        }
+                        out.flush()
+                    }
+                }.start()
+            }
+        }
+        acceptThread.start()
+        try {
+            block("http://127.0.0.1:${server.localPort}/dav/")
+        } finally {
+            running.set(false)
+            runCatching { server.close() }
+        }
     }
 }

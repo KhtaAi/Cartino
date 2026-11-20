@@ -57,6 +57,8 @@ data class WebDavConfig(
     val remotePath: String = "cartino_backup.enc"
 )
 
+class VaultArchiveNotFoundException(message: String) : IllegalStateException(message)
+
 object BackupSyncManager {
 
     private val moshi = Moshi.Builder()
@@ -730,8 +732,7 @@ object BackupSyncManager {
     suspend fun uploadVaultArchiveToWebDav(
         context: Context,
         config: WebDavConfig,
-        password: CharArray,
-        totpCode: String? = null
+        password: CharArray
     ): Boolean = withContext(Dispatchers.IO) {
         val serverUrlClean = config.serverUrl.trim()
         val usernameClean = config.username.trim()
@@ -760,7 +761,7 @@ object BackupSyncManager {
         val tempFile = File.createTempFile("vault_upload_", ".cvault", context.cacheDir)
         try {
             val tempUri = Uri.fromFile(tempFile)
-            val archiveResult = VaultArchiveManager.createVaultArchive(context, tempUri, password, totpCode)
+            val archiveResult = VaultArchiveManager.createVaultArchive(context, tempUri, password)
             if (!archiveResult.success) {
                 SyncLogger.log("WEBDAV_PUT", "خطا در ساخت آرشیو صندوق: ${archiveResult.errorMessage}")
                 throw IllegalStateException(archiveResult.errorMessage ?: "خطا در ساخت آرشیو صندوق")
@@ -866,7 +867,7 @@ object BackupSyncManager {
                     }
                     404 -> {
                         SyncLogger.log("WEBDAV_GET", "خطای 404 Not Found: فایل '$fileNameOnly' در سرور یافت نشد.")
-                        throw IllegalStateException("فایل آرشیو صندوق با نام $fileNameOnly در سرور WebDAV یافت نشد (کد: 404)")
+                        throw VaultArchiveNotFoundException("فایل آرشیو صندوق با نام $fileNameOnly در سرور WebDAV یافت نشد (کد: 404)")
                     }
                     else -> {
                         SyncLogger.log("WEBDAV_GET", "خطا در دریافت فایل از سرور (کد $code)")

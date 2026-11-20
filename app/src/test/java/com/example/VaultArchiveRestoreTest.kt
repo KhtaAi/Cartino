@@ -10,6 +10,7 @@ import com.example.data.model.VaultFile
 import com.example.data.model.VaultGroup
 import com.example.ui.CartinoViewModel
 import com.example.ui.MergeStrategy
+import com.example.util.TotpManager
 import com.example.util.VaultArchiveManager
 import com.example.util.VaultStorageManager
 import kotlinx.coroutines.runBlocking
@@ -71,6 +72,7 @@ class VaultArchiveRestoreTest {
         runBlocking {
             clearVaultDbAndDisk()
             VaultStorageManager.setTestKeyProviderForTesting(null)
+            VaultArchiveManager.setTestTotpConfigProviderForTesting(null)
             VaultStorageManager.getVaultDirectory(application).deleteRecursively()
             tempDir.deleteRecursively()
         }
@@ -119,8 +121,7 @@ class VaultArchiveRestoreTest {
             val archiveResult = VaultArchiveManager.createVaultArchive(
                 context = application,
                 targetUri = Uri.fromFile(archiveFile),
-                password = password,
-                totpCode = null
+                password = password
             )
             assertTrue(archiveResult.success)
 
@@ -197,8 +198,7 @@ class VaultArchiveRestoreTest {
         val res = VaultArchiveManager.createVaultArchive(
             context = application,
             targetUri = Uri.fromFile(archiveFile),
-            password = "MergeStrategy#Pass2026".toCharArray(),
-            totpCode = null
+            password = "MergeStrategy#Pass2026".toCharArray()
         )
         assertTrue(res.success)
 
@@ -351,8 +351,7 @@ class VaultArchiveRestoreTest {
             val archiveRes = VaultArchiveManager.createVaultArchive(
                 context = application,
                 targetUri = Uri.fromFile(archiveFile),
-                password = "Integrity#CheckPass2026".toCharArray(),
-                totpCode = null
+                password = "Integrity#CheckPass2026".toCharArray()
             )
             assertTrue(archiveRes.success)
 
@@ -490,8 +489,7 @@ class VaultArchiveRestoreTest {
             val archiveRes = VaultArchiveManager.createVaultArchive(
                 context = application,
                 targetUri = Uri.fromFile(archiveFile),
-                password = "RightPassword!2026".toCharArray(),
-                totpCode = null
+                password = "RightPassword!2026".toCharArray()
             )
             assertTrue(archiveRes.success)
 
@@ -567,8 +565,7 @@ class VaultArchiveRestoreTest {
             val archiveRes = VaultArchiveManager.createVaultArchive(
                 context = application,
                 targetUri = Uri.fromFile(archiveFile),
-                password = "LargeStreamTest!2026".toCharArray(),
-                totpCode = null
+                password = "LargeStreamTest!2026".toCharArray()
             )
             assertTrue(archiveRes.success)
 
@@ -598,6 +595,217 @@ class VaultArchiveRestoreTest {
                 "Retained heap delta ($retainedDelta bytes) should stay small after restoring 12 MB",
                 retainedDelta < 4L * 1024L * 1024L
             )
+        }
+    }
+
+    @Test
+    fun restoreV2ArchiveWithTotpRequired_acceptsValidAndWindowCodes_ignoresDeviceTotp_andPreservesDeviceState() {
+        runBlocking {
+            val archiveSecret = "JBSWY3DPEHPK3PXP"
+            VaultArchiveManager.setTestTotpConfigProviderForTesting { true to archiveSecret }
+
+            val dao = CartinoDatabase.getDatabase(application).vaultDao()
+            val grp = VaultGroup(id = "grp-v2-totp", name = "اسناد محرمانه", parentGroupId = null, createdAt = 100L)
+            dao.insertGroup(grp)
+
+            val secretBytes = "Encrypted V2 TOTP Vault File".toByteArray(Charsets.UTF_8)
+            val src = File(tempDir, "v2_secret.txt").apply { writeBytes(secretBytes) }
+            viewModel.importVaultFilesInternal(listOf(Uri.fromFile(src)), currentGroupId = grp.id)
+
+            val archiveFile = File(tempDir, "v2_totp.cvault")
+            val archiveRes = VaultArchiveManager.createVaultArchive(
+                context = application,
+                targetUri = Uri.fromFile(archiveFile),
+                password = "V2TotpPassword!2026".toCharArray()
+            )
+            assertTrue(archiveRes.success)
+
+            clearVaultDbAndDisk()
+
+            // Device TOTP is now disabled (or could have a completely different secret),
+            // yet restoring v2 must verify strictly against manifest.totpSecret and leave device TOTP untouched.
+            VaultArchiveManager.setTestTotpConfigProviderForTesting { false to "" }
+            val wasTotpEnabledBefore = viewModel.isTotpEnabled.value
+            val totpSecretBefore = viewModel.totpSecret.value
+
+            val inspection = VaultArchiveManager.inspectVaultArchiveWithVersion(
+                context = application,
+                sourceUri = Uri.fromFile(archiveFile),
+                password = "V2TotpPassword!2026".toCharArray()
+            )
+            assertEquals(2, inspection.version)
+            assertTrue(inspection.manifest.totpRequired)
+            assertEquals(archiveSecret, inspection.manifest.totpSecret)
+
+            // Verify adjacent time-window (-30s) code is accepted just like standard TOTP window
+            val prevWindowCode = TotpManager.generateTotp(
+                archiveSecret,
+                (System.currentTimeMillis() / 1000L) - 30L
+            )
+            val report = viewModel.importVaultArchiveInternal(
+                sourceUri = Uri.fromFile(archiveFile),
+                password = "V2TotpPassword!2026".toCharArray(),
+                totpCode = prevWindowCode,
+                mergeStrategy = MergeStrategy.SKIP_DUPLICATES
+            )
+
+            assertEquals(1, report.newFiles)
+            val restoredFile = dao.getAllFilesList().single()
+            assertArrayEquals(secretBytes, readDecryptedBytes(restoredFile.storageName))
+            assertEquals(wasTotpEnabledBefore, viewModel.isTotpEnabled.value)
+            assertEquals(totpSecretBefore, viewModel.totpSecret.value)
+        }
+    }
+
+    @Test
+    fun restoreV2ArchiveWithTotpRequired_wrongOrMissingCodeFailsClearlyWithoutAnyMerge() {
+        runBlocking {
+            val archiveSecret = "JBSWY3DPEHPK3PXP"
+            VaultArchiveManager.setTestTotpConfigProviderForTesting { true to archiveSecret }
+
+            val src = File(tempDir, "protected.txt").apply {
+                writeBytes("Must not merge on wrong TOTP".toByteArray(Charsets.UTF_8))
+            }
+            viewModel.importVaultFilesInternal(listOf(Uri.fromFile(src)), currentGroupId = null)
+
+            val archiveFile = File(tempDir, "v2_wrong_totp.cvault")
+            val archiveRes = VaultArchiveManager.createVaultArchive(
+                context = application,
+                targetUri = Uri.fromFile(archiveFile),
+                password = "V2WrongTotp!Pass2026".toCharArray()
+            )
+            assertTrue(archiveRes.success)
+
+            clearVaultDbAndDisk()
+
+            val dao = CartinoDatabase.getDatabase(application).vaultDao()
+
+            // Missing code
+            val missingResult = VaultArchiveManager.restoreVaultArchive(
+                context = application,
+                sourceUri = Uri.fromFile(archiveFile),
+                password = "V2WrongTotp!Pass2026".toCharArray(),
+                totpCode = null
+            )
+            assertFalse(missingResult.success)
+            assertNotNull(missingResult.errorMessage)
+            assertTrue(missingResult.errorMessage!!.contains("TOTP"))
+            assertEquals(0, dao.getAllFilesList().size)
+            assertTrue(VaultStorageManager.getVaultDirectory(application).listFiles().orEmpty().none { it.isFile })
+
+            // Wrong code (pick one guaranteed outside [-1, +1] time steps)
+            val currentSec = System.currentTimeMillis() / 1000L
+            val validWindowCodes = (-1..1).map {
+                TotpManager.generateTotp(archiveSecret, currentSec + it * 30L)
+            }.toSet()
+            val invalidCode = listOf("000000", "111111", "222222", "999999").first { it !in validWindowCodes }
+
+            val wrongResult = VaultArchiveManager.restoreVaultArchive(
+                context = application,
+                sourceUri = Uri.fromFile(archiveFile),
+                password = "V2WrongTotp!Pass2026".toCharArray(),
+                totpCode = invalidCode
+            )
+            assertFalse(wrongResult.success)
+            assertNotNull(wrongResult.errorMessage)
+            assertTrue(wrongResult.errorMessage!!.contains("TOTP"))
+            assertEquals(0, dao.getAllFilesList().size)
+            assertTrue(VaultStorageManager.getVaultDirectory(application).listFiles().orEmpty().none { it.isFile })
+        }
+    }
+
+    @Test
+    fun restoreV1ArchiveWithTotpKeyBinding_preservesBackwardCompatibility() {
+        runBlocking {
+            val payloadBytes = "Legacy V1 Vault File".toByteArray(Charsets.UTF_8)
+            val sha = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(payloadBytes).joinToString("") { "%02x".format(it) }
+            val now = System.currentTimeMillis()
+            val manifest = com.example.util.VaultArchiveManifest(
+                timestamp = now,
+                totpRequired = true,
+                totpSecret = "",
+                groups = listOf(
+                    com.example.util.VaultArchiveGroupMetadata(
+                        id = "v1-grp",
+                        name = "آرشیو قدیمی",
+                        parentGroupId = null,
+                        createdAt = now
+                    )
+                ),
+                files = listOf(
+                    com.example.util.VaultArchiveFileMetadata(
+                        id = "v1-file",
+                        groupId = "v1-grp",
+                        displayName = "legacy_v1.txt",
+                        originalFileName = "legacy_v1.txt",
+                        mimeType = "text/plain",
+                        sizeBytes = payloadBytes.size.toLong(),
+                        sha256 = sha,
+                        storageName = "v1.vault",
+                        createdAt = now,
+                        updatedAt = now
+                    )
+                )
+            )
+
+            val salt = ByteArray(16) { 0x33 }
+            val iv = ByteArray(12) { 0x44 }
+            val password = "LegacyV1!Password2026".toCharArray()
+            val v1TotpCode = "482910"
+            val key = VaultArchiveManager.deriveArchiveKey(password, salt, v1TotpCode)
+            val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").apply {
+                init(
+                    javax.crypto.Cipher.ENCRYPT_MODE,
+                    javax.crypto.spec.SecretKeySpec(key, "AES"),
+                    javax.crypto.spec.GCMParameterSpec(128, iv)
+                )
+            }
+            val manifestBytes = VaultArchiveManager.manifestAdapter.toJson(manifest).toByteArray(Charsets.UTF_8)
+            val gzOut = java.io.ByteArrayOutputStream()
+            java.util.zip.GZIPOutputStream(gzOut).use { it.write(manifestBytes) }
+            val gzManifest = gzOut.toByteArray()
+
+            val v1File = File(tempDir, "legacy_v1.cvault")
+            v1File.outputStream().use { rawOut ->
+                rawOut.write("CARTINO_VAULT".toByteArray(Charsets.US_ASCII))
+                rawOut.write(ByteBuffer.allocate(4).putInt(1).array())
+                rawOut.write(salt)
+                rawOut.write(iv)
+                javax.crypto.CipherOutputStream(rawOut, cipher).use { cOut ->
+                    cOut.write(ByteBuffer.allocate(4).putInt(gzManifest.size).array())
+                    cOut.write(gzManifest)
+
+                    val nameBytes = "v1.vault".toByteArray(Charsets.UTF_8)
+                    cOut.write(ByteBuffer.allocate(4).putInt(nameBytes.size).array())
+                    cOut.write(nameBytes)
+                    cOut.write(ByteBuffer.allocate(8).putLong(payloadBytes.size.toLong()).array())
+                    cOut.write(payloadBytes)
+                }
+            }
+
+            // Wrong v1 TOTP must fail GCM verification
+            val wrongV1 = VaultArchiveManager.restoreVaultArchive(
+                context = application,
+                sourceUri = Uri.fromFile(v1File),
+                password = "LegacyV1!Password2026".toCharArray(),
+                totpCode = "000000"
+            )
+            assertFalse(wrongV1.success)
+
+            // Valid v1 TOTP restores successfully
+            val report = viewModel.importVaultArchiveInternal(
+                sourceUri = Uri.fromFile(v1File),
+                password = "LegacyV1!Password2026".toCharArray(),
+                totpCode = v1TotpCode,
+                mergeStrategy = MergeStrategy.SKIP_DUPLICATES
+            )
+            assertEquals(1, report.newGroups)
+            assertEquals(1, report.newFiles)
+            val dao = CartinoDatabase.getDatabase(application).vaultDao()
+            val restored = dao.getAllFilesList().single()
+            assertEquals("legacy_v1.txt", restored.displayName)
+            assertArrayEquals(payloadBytes, readDecryptedBytes(restored.storageName))
         }
     }
 }

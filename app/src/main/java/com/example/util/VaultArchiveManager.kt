@@ -77,8 +77,14 @@ data class VaultArchiveFileMetadata(
 data class VaultArchiveManifest(
     val timestamp: Long,
     val totpRequired: Boolean,
+    val totpSecret: String = "",
     val groups: List<VaultArchiveGroupMetadata>,
     val files: List<VaultArchiveFileMetadata>
+)
+
+data class VaultArchiveInspection(
+    val version: Int,
+    val manifest: VaultArchiveManifest
 )
 
 /**
@@ -87,7 +93,7 @@ data class VaultArchiveManifest(
  *
  * Binary layout:
  *  - Magic (13 bytes, ASCII): "CARTINO_VAULT"
- *  - Format version (4 bytes, big-endian Int): 1
+ *  - Format version (4 bytes, big-endian Int): 2 (v1 supported on restore)
  *  - Salt (16 bytes, random)
  *  - IV (12 bytes, random)
  *  - Single AES-256-GCM (`AES/GCM/NoPadding`, 128-bit tag) encrypted stream containing:
@@ -104,7 +110,8 @@ object VaultArchiveManager {
 
     const val MAGIC_HEADER = "CARTINO_VAULT"
     const val MAGIC_LENGTH_BYTES = 13
-    const val FORMAT_VERSION = 1
+    const val FORMAT_VERSION_V1 = 1
+    const val FORMAT_VERSION = 2
     const val SALT_LENGTH_BYTES = 16
     const val IV_LENGTH_BYTES = 12
     const val GCM_TAG_LENGTH_BITS = 128
@@ -123,11 +130,17 @@ object VaultArchiveManager {
 
     internal val manifestAdapter = moshi.adapter(VaultArchiveManifest::class.java)
 
+    @Volatile
+    private var testTotpConfigProvider: (() -> Pair<Boolean, String>)? = null
+
+    internal fun setTestTotpConfigProviderForTesting(provider: (() -> Pair<Boolean, String>)?) {
+        testTotpConfigProvider = provider
+    }
+
     suspend fun createVaultArchive(
         context: Context,
         targetUri: Uri,
-        password: CharArray,
-        totpCode: String? = null
+        password: CharArray
     ): ArchiveResult = withContext(Dispatchers.IO) {
         if (password.isEmpty()) {
             return@withContext ArchiveResult(
@@ -140,24 +153,9 @@ object VaultArchiveManager {
         val resolver = appContext.contentResolver
 
         val (totpEnabledInPrefs, totpSecretInPrefs) = readTotpConfig(appContext)
-        val cleanTotpCode = totpCode?.trim()?.takeIf { it.isNotEmpty() }
+        val totpRequired = totpEnabledInPrefs
+        val totpSecret = if (totpEnabledInPrefs) totpSecretInPrefs else ""
 
-        if (totpEnabledInPrefs) {
-            if (cleanTotpCode == null) {
-                return@withContext ArchiveResult(
-                    success = false,
-                    errorMessage = "احراز هویت دو مرحله‌ای فعال است؛ وارد کردن کد TOTP الزامی است"
-                )
-            }
-            if (totpSecretInPrefs.isNotBlank() && !TotpManager.verifyTotp(totpSecretInPrefs, cleanTotpCode)) {
-                return@withContext ArchiveResult(
-                    success = false,
-                    errorMessage = "کد احراز هویت دو مرحله‌ای (TOTP) نادرست است"
-                )
-            }
-        }
-
-        val totpRequired = totpEnabledInPrefs || cleanTotpCode != null
         val vaultDao = CartinoDatabase.getDatabase(appContext).vaultDao()
         val groups: List<VaultGroup> = vaultDao.getAllGroupsList()
         val files: List<VaultFile> = vaultDao.getAllFilesList()
@@ -187,14 +185,18 @@ object VaultArchiveManager {
         val derivedKeyBytes = deriveArchiveKey(
             password = password,
             salt = salt,
-            totpCode = if (totpRequired) cleanTotpCode else null
+            totpCode = null
         )
 
         var wroteToTarget = false
         try {
+            if (totpRequired && totpSecret.isNotBlank()) {
+                SyncLogger.log("VAULT_ARCHIVE", "Secret TOTP با موفقیت در مانیفست آرشیو صندوق ذخیره شد")
+            }
             val manifest = VaultArchiveManifest(
                 timestamp = System.currentTimeMillis(),
                 totpRequired = totpRequired,
+                totpSecret = totpSecret,
                 groups = groups.map { grp ->
                     VaultArchiveGroupMetadata(
                         id = grp.id,
@@ -333,6 +335,7 @@ object VaultArchiveManager {
 
     private class VaultArchiveInvalidFormatException(message: String) : IOException(message)
     private class VaultArchiveIntegrityException(message: String) : IOException(message)
+    private class VaultArchiveTotpException(message: String) : IOException(message)
 
     suspend fun restoreVaultArchive(
         context: Context,
@@ -362,7 +365,7 @@ object VaultArchiveManager {
             rawIn.use { inputStream ->
                 val bufferedIn = BufferedInputStream(inputStream, STREAM_BUFFER_BYTES)
 
-                // 1. Validate magic header (13 ASCII bytes) and format version (4B BE Int = 1)
+                // 1. Validate magic header (13 ASCII bytes) and format version (4B BE Int = 1 or 2)
                 val expectedMagic = MAGIC_HEADER.toByteArray(Charsets.US_ASCII)
                 val magicBytes = readExactBytesOrNull(bufferedIn, MAGIC_LENGTH_BYTES)
                     ?: throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
@@ -372,7 +375,7 @@ object VaultArchiveManager {
 
                 val version = readIntBigEndianOrNull(bufferedIn)
                     ?: throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
-                if (version != FORMAT_VERSION) {
+                if (version != FORMAT_VERSION_V1 && version != FORMAT_VERSION) {
                     throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
                 }
 
@@ -382,10 +385,12 @@ object VaultArchiveManager {
                     ?: throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
 
                 // 2. Derive 32-byte key via Argon2id (iterations=4, memory=65536, parallelism=1)
+                // Version 1 bound optional totpCode into KDF; Version 2 derives strictly from password.
+                val keyTotpCode = if (version == FORMAT_VERSION_V1) totpCode else null
                 derivedKeyBytes = deriveArchiveKey(
                     password = password,
                     salt = salt,
-                    totpCode = totpCode
+                    totpCode = keyTotpCode
                 )
 
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -440,6 +445,20 @@ object VaultArchiveManager {
                         throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
                     }
                     parsedManifest = manifest
+
+                    if (version >= FORMAT_VERSION && manifest.totpRequired) {
+                        if (manifest.totpSecret.isBlank()) {
+                            throw VaultArchiveTotpException(
+                                "این آرشیو صندوق نیازمند احراز هویت دو مرحله‌ای است اما سکرت TOTP در آن ذخیره نشده است"
+                            )
+                        }
+                        val cleanCode = totpCode?.trim()?.takeIf { it.isNotEmpty() }
+                        if (cleanCode == null || !TotpManager.verifyTotp(manifest.totpSecret, cleanCode)) {
+                            throw VaultArchiveTotpException(
+                                "کد احراز هویت دو مرحله‌ای (TOTP) نادرست است یا با سکرت آرشیو مطابقت ندارد"
+                            )
+                        }
+                    }
 
                     val manifestByStorageName = manifest.files.associateBy { it.storageName }
                     val totalFiles = manifest.files.size
@@ -541,6 +560,7 @@ object VaultArchiveManager {
 
             val errorMsg = when {
                 t is VaultArchiveInvalidFormatException -> "فرمت فایل نامعتبر است"
+                t is VaultArchiveTotpException -> t.message ?: "کد احراز هویت دو مرحله‌ای (TOTP) نادرست است"
                 t is VaultArchiveIntegrityException -> t.message ?: "یکپارچگی فایل تأیید نشد"
                 hasThrowableCause<AEADBadTagException>(t) ->
                     "رمز عبور اشتباه است یا یکپارچگی فایل آرشیو تأیید نشد (GCM tag verification failed)"
@@ -566,7 +586,19 @@ object VaultArchiveManager {
         sourceUri: Uri,
         password: CharArray,
         totpCode: String? = null
-    ): VaultArchiveManifest = withContext(Dispatchers.IO) {
+    ): VaultArchiveManifest = inspectVaultArchiveWithVersion(
+        context = context,
+        sourceUri = sourceUri,
+        password = password,
+        totpCode = totpCode
+    ).manifest
+
+    suspend fun inspectVaultArchiveWithVersion(
+        context: Context,
+        sourceUri: Uri,
+        password: CharArray,
+        totpCode: String? = null
+    ): VaultArchiveInspection = withContext(Dispatchers.IO) {
         if (password.isEmpty()) {
             throw IllegalArgumentException("رمز عبور برای بررسی آرشیو نمی‌تواند خالی باشد")
         }
@@ -591,7 +623,7 @@ object VaultArchiveManager {
 
                 val version = readIntBigEndianOrNull(bufferedIn)
                     ?: throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
-                if (version != FORMAT_VERSION) {
+                if (version != FORMAT_VERSION_V1 && version != FORMAT_VERSION) {
                     throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
                 }
 
@@ -600,10 +632,11 @@ object VaultArchiveManager {
                 val iv = readExactBytesOrNull(bufferedIn, IV_LENGTH_BYTES)
                     ?: throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
 
+                val keyTotpCode = if (version == FORMAT_VERSION_V1) totpCode else null
                 derivedKeyBytes = deriveArchiveKey(
                     password = password,
                     salt = salt,
-                    totpCode = totpCode
+                    totpCode = keyTotpCode
                 )
 
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -611,26 +644,51 @@ object VaultArchiveManager {
                 cipher.init(Cipher.DECRYPT_MODE, secretKeySpec, GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
 
                 CipherInputStream(bufferedIn, cipher).use { cipherIn ->
+                    fun drainToVerifyGcmTag() {
+                        val drainBuf = ByteArray(8192)
+                        while (cipherIn.read(drainBuf) != -1) {
+                            // Exhaust stream so CipherInputStream runs cipher.doFinal()
+                        }
+                    }
+
                     val manifestLen = readIntBigEndianOrNull(cipherIn)
-                        ?: throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
+                        ?: run {
+                            drainToVerifyGcmTag()
+                            throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
+                        }
                     if (manifestLen !in 1..(32 * 1024 * 1024)) {
+                        drainToVerifyGcmTag()
                         throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
                     }
 
-                    val gzippedManifest = readExactBytesOrThrow(cipherIn, manifestLen)
+                    val gzippedManifest = try {
+                        readExactBytesOrThrow(cipherIn, manifestLen)
+                    } catch (e: Throwable) {
+                        drainToVerifyGcmTag()
+                        throw e
+                    }
                     if (gzippedManifest.size < 2 ||
                         gzippedManifest[0] != 0x1f.toByte() ||
                         gzippedManifest[1] != 0x8b.toByte()
                     ) {
+                        drainToVerifyGcmTag()
                         throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
                     }
 
-                    val manifestJson = GZIPInputStream(ByteArrayInputStream(gzippedManifest))
-                        .bufferedReader(Charsets.UTF_8)
-                        .use { it.readText() }
+                    val manifestJson = try {
+                        GZIPInputStream(ByteArrayInputStream(gzippedManifest))
+                            .bufferedReader(Charsets.UTF_8)
+                            .use { it.readText() }
+                    } catch (e: Throwable) {
+                        drainToVerifyGcmTag()
+                        throw e
+                    }
 
-                    manifestAdapter.fromJson(manifestJson)
-                        ?: throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
+                    val manifest = manifestAdapter.fromJson(manifestJson) ?: run {
+                        drainToVerifyGcmTag()
+                        throw VaultArchiveInvalidFormatException("فرمت فایل نامعتبر است")
+                    }
+                    VaultArchiveInspection(version = version, manifest = manifest)
                 }
             }
         } finally {
@@ -684,6 +742,7 @@ object VaultArchiveManager {
     }
 
     private fun readTotpConfig(context: Context): Pair<Boolean, String> {
+        testTotpConfigProvider?.let { return it() }
         return try {
             val masterKey = MasterKey.Builder(context)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
